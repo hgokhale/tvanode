@@ -569,11 +569,29 @@ void Session::CreatePublicationWorker(uv_work_t* req)
     Publication* publication = new Publication(request->session);
     publication->SetHandle(publisher);
 
+  /* Tervela API versions 5.1.5 and above support retrieving the QoS of a publication
+     after it was created.  This allows the node library to use the same set of functions
+     for publishing to both BE/GC and GD topics, unlink the C/Java/C# APIs which have
+     separate functions for GD.  
+
+     For library versions prior to 5.1.5, the node library will need to be hardcoded
+     to support only GC topics or only GD topics for publication. 
+     Change the explicit SetQos below to TVA_QOS_GUARANTEED_DELIVERY for GD publish.
+     Note that in either case you can't publish GD to a GC topic and vice versa. */
+
+#ifdef TVA_PUBINFO_QOS
     int qos;
     if (tvaPubInfoGet(publisher, TVA_PUBINFO_QOS, &qos, sizeof(qos)) == TVA_OK)
     {
       publication->SetQos(qos);
     }
+#else
+    /* NOTE: this will fail if the underlying topic is GD, since you must publish
+       GD to a topic that could have GD subscribers.  You can set it to
+       TVA_QOS_GUARANTEED_DELIVERY instead, but then you will only be able to
+       publish to GD topics.  */
+    publication->SetQos(TVA_QOS_GUARANTEED_CONNECTED);
+#endif
 
     request->publication = publication;
   }
