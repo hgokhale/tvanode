@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <v8.h>
 #include <node.h>
 #include "tvaClientAPI.h"
