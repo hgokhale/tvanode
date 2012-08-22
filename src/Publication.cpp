@@ -285,7 +285,7 @@ void Publication::SendMessageWorker(uv_work_t* req)
 #ifdef TVA_PUB_FL_NOBLOCK
         rc = tvaSendMessageEx(messageData, TVA_PUB_FL_NOBLOCK);
 #else
-	rc = tvaSendMessage(messageData);
+        rc = tvaSendMessage(messageData);
 #endif
         request->invokeCallback = true;
       }

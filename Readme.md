@@ -2,29 +2,45 @@
 
 Tervela-node allows access to the Tervela Messaging Framework from within a Node.js application.
 
-## Node versions we have tested
+## Installing
+
+### Node versions we have tested
 
 The bulk of our testing has been with Node 0.8, but building with Node 0.6 also works, at least on Linux.
 
-## Platforms we have tested
+### Platforms we have tested
 
 * CentOS 6.0 64 bit 
 * Ubuntu 12.04 64 bit 
 * Windows 7 64 bit with 32 bit node & 32 bit tva library (note: these must match)
 
-## Dependencies
+### Dependencies
 
-* Tervela Client Library 5.1.5 or greater installed in the default location
+* Tervela Client Library 5.0.0 or greater installed in the default location
 * node 0.6 or >= 0.8
 * node-gyp
 
-## How to Build
+### Note on Tervela Client Library Version
+ 
+* Tervela API version 5.1.5 or higher is recommended.  Earlier versions do not support querying an existing
+  publication for its QoS, which means that Tervela-node can not dynamically switch between using tvaSendMessage for
+  BE/GC and tvagdMsgSend for GD.  Right now, if the library is older than 5.1.5, only GC publications will work.
+  If you would prefer that only GD publications work, modify Session.cpp around line 593.
+
+### How to Build
 
     git clone git://github.com/Tervela/tvanode.git
     cd tvanode
-    node-gyp configure build
+    node-gyp configure 
+    node-gyp build
     
 This will result in a Tervela node module in `build/Release/tervela.node`.  You can copy that to your node path, or reference the fully qualified path in your 'require' line.
+
+### Notes
+
+You may need to be root to run `node-gyp build`.  
+On RHEL6 it seems you can't run `node-gyp configure build` as one invocation as you can on Ubuntu.  
+On RHEL5, you need to run node-gyp with python 2.6 (`PYTHON=python26 node-gyp configure ...`), but there are bizarre compilation errors in the V8 headers.  
 
 
 ## How to Use
