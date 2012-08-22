@@ -2,11 +2,30 @@
 
 Tervela-node allows access to the Tervela Messaging Framework from within a Node.js application.
 
-## How to Install
+## Node versions we have tested
 
-Download the source code from GitHub and build it.
+The bulk of our testing has been with Node 0.8, but building with Node 0.6 also works, at least on Linux.
 
-Building Tervela-node requires the Tervela Client API to be installed on the build machine.  Running Tervela-node also requires the Tervela Client API to be installed on the machine.
+## Platforms we have tested
+
+* CentOS 6.0 64 bit 
+* Ubuntu 12.04 64 bit 
+* Windows 7 64 bit with 32 bit node & 32 bit tva library (note: these must match)
+
+## Dependencies
+
+* Tervela Client Library 5.1.5 or greater installed in the default location
+* node 0.6 or >= 0.8
+* node-gyp
+
+## How to Build
+
+    git clone git://github.com/Tervela/tvanode.git
+    cd tvanode
+    node-gyp configure build
+    
+This will result in a Tervela node module in `build/Release/tervela.node`.  You can copy that to your node path, or reference the fully qualified path in your 'require' line.
+
 
 ## How to Use
 
