@@ -1,0 +1,23 @@
+{
+    "name": "tervela",
+    "version": "0.1.0",
+    "main": "./build/Release/tervela",
+    "description": "Real-time messaging over the Tervela data fabric",
+    "homepage": "http://www.tervela.com",
+    "keywords": ["messaging", "realtime", "tervela"],
+    "author": "Tervela <support@tervela.com>",
+    "contributors": [
+        { "name": "Stephen Kazmierczak", "email": "skaz@tervela.com" }
+    ],
+    "repository":{
+        "type": "git"
+      , "url": "https://github.com/Tervela/tervela.git"
+    },
+   "directories": {
+       "src": "src"
+   },
+    "engines": { "node": ">= 0.8.0" },
+    "scripts": {
+        "install": "node-gyp configure build"
+    }
+}
