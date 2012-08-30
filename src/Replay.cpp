@@ -3,46 +3,47 @@
 #include "DataTypes.h"
 #include "Helpers.h"
 #include "Session.h"
-#include "Subscription.h"
+#include "Replay.h"
 
 using namespace v8;
 
-Persistent<Function> Subscription::constructor;
-
+Persistent<Function> Replay::constructor;
+static bool _peInitialized = false;
 
 /*-----------------------------------------------------------------------------
  * Initialize the Subscription module
  */
-void Subscription::Init(Handle<Object> target)
+void Replay::Init(Handle<Object> target)
 {
   HandleScope scope;
 
   Local<FunctionTemplate> t = FunctionTemplate::New(New);
-  t->SetClassName(String::NewSymbol("Subscription"));
+  t->SetClassName(String::NewSymbol("Replay"));
   t->InstanceTemplate()->SetInternalFieldCount(1);
 
   t->PrototypeTemplate()->Set(String::NewSymbol("on"), FunctionTemplate::New(On)->GetFunction());
-  t->PrototypeTemplate()->Set(String::NewSymbol("ackMessage"), FunctionTemplate::New(AckMessage)->GetFunction());
+  t->PrototypeTemplate()->Set(String::NewSymbol("pause"), FunctionTemplate::New(Pause)->GetFunction());
+  t->PrototypeTemplate()->Set(String::NewSymbol("resume"), FunctionTemplate::New(Resume)->GetFunction());
   t->PrototypeTemplate()->Set(String::NewSymbol("stop"), FunctionTemplate::New(Stop)->GetFunction());
 
   constructor = Persistent<Function>::New(t->GetFunction());
 }
 
 /*-----------------------------------------------------------------------------
- * Construct a new Subscription object
+ * Construct a new Replay object
  */
-Handle<Value> Subscription::New(const Arguments& args)
+Handle<Value> Replay::New(const Arguments& args)
 {
   HandleScope scope;
-  Subscription* sub = (Subscription*)External::Unwrap(args[0]->ToObject());
-  sub->Wrap(args.This());
+  Replay* replay = (Replay*)External::Unwrap(args[0]->ToObject());
+  replay->Wrap(args.This());
   return args.This();
 }
 
-Handle<Value> Subscription::NewInstance(Subscription* subscription)
+Handle<Value> Replay::NewInstance(Replay* replay)
 {
   HandleScope scope;
-  Handle<External> wrapper = External::New(subscription);
+  Handle<External> wrapper = External::New(replay);
   Handle<Value> argv[1] = { wrapper };
   Local<Object> instance = constructor->NewInstance(1, argv);
 
@@ -52,77 +53,40 @@ Handle<Value> Subscription::NewInstance(Subscription* subscription)
 /*-----------------------------------------------------------------------------
  * Constructor & Destructor
  */
-Subscription::Subscription(Session* session)
+Replay::Replay(Session* session)
 {
-  _async.data = this;
+  _msgAsync.data = this;
+  _notifyAsync.data = this;
   _session = session;
   _handle = TVA_INVALID_HANDLE;
   _isInUse = false;
   uv_mutex_init(&_messageEventLock);
+  uv_mutex_init(&_notificationEventLock);
 }
 
-Subscription::~Subscription()
+Replay::~Replay()
 {
-  for (size_t i = 0; i < _messageHandler.size(); i++)
+  if (_handle != TVA_INVALID_HANDLE)
   {
-    _messageHandler[i].Dispose();
-  }
-
-  if (_topic)
-  {
-    free(_topic);
+    tvaReplayRelease(_handle);
   }
 
   uv_mutex_destroy(&_messageEventLock);
-}
-
-/*-----------------------------------------------------------------------------
- * Perform create subscription
- */
-TVA_STATUS Subscription::Start(char* topic, uint8_t qos, char* name, GdSubscriptionAckMode gdAckMode)
-{
-  TVA_STATUS rc;
-  TVA_HANDLE subHandle = TVA_INVALID_HANDLE;
-  
-  if (qos == TVA_QOS_GUARANTEED_DELIVERY)
-  {
-    rc = tvagdSubCbNew(GetSession()->GetGdHandle(), name, topic,
-                       Subscription::MessageReceivedEvent, this, &subHandle);
-  }
-  else
-  {
-    int cachePeriod = 3000;
-    if (qos == TVA_QOS_BEST_EFFORT)
-    {
-      cachePeriod = 50;
-    }
-
-    rc = tvaSubscribeWithCallbackEx(topic, Subscription::MessageReceivedEvent, this,
-                                    GetSession()->GetHandle(), qos, true, cachePeriod, &subHandle);
-  }
-
-  if (rc == TVA_OK)
-  {
-    _topic = strdup(topic);
-    _qos = qos;
-    _ackMode = gdAckMode;
-    _handle = subHandle;
-    _session->AddSubscription(this);
-  }
-
-  return rc;
+  uv_mutex_destroy(&_notificationEventLock);
 }
 
 
 /*****     On     *****/
 
 /*-----------------------------------------------------------------------------
- * Register for subscription events
+ * Register for replay events
  *
- * session.on(event, listener);
+ * replay.on(event, listener);
  *
  * Events / Listeners:
  *   'message'              - Message received                        - function (message) { }
+ *   'finish'               - Replay finished, all messages received  - function () { }
+ *   'error'                - Replay error occurred                   - function (err) { }
  *
  * message = {
  *     topic,                 (string : message topic)
@@ -131,10 +95,10 @@ TVA_STATUS Subscription::Start(char* topic, uint8_t qos, char* name, GdSubscript
  *     fields                 (Array : message fields list ([name]=value))
  * }
  */
-Handle<Value> Subscription::On(const Arguments& args)
+Handle<Value> Replay::On(const Arguments& args)
 {
   HandleScope scope;
-  Subscription* subscription = ObjectWrap::Unwrap<Subscription>(args.This());
+  Replay* replay = ObjectWrap::Unwrap<Replay>(args.This());
 
   // Arguments checking
   PARAM_REQ_NUM(2, args.Length());
@@ -144,7 +108,7 @@ Handle<Value> Subscription::On(const Arguments& args)
   String::AsciiValue evt(args[0]->ToString());
   Local<Function> handler = Local<Function>::Cast(args[1]);
 
-  subscription->SetEventHandler(*evt, handler);
+  replay->SetEventHandler(*evt, handler);
 
   return scope.Close(args.This());
 }
@@ -152,11 +116,19 @@ Handle<Value> Subscription::On(const Arguments& args)
 /*-----------------------------------------------------------------------------
  * Set subscription event handler
  */
-void Subscription::SetEventHandler(char* evt, Local<Function> handler)
+void Replay::SetEventHandler(char* evt, Local<Function> handler)
 {
   if (tva_str_casecmp(evt, "message") == 0)
   {
     _messageHandler.push_back(Persistent<Function>::New(handler));
+  }
+  else if (tva_str_casecmp(evt, "finish") == 0)
+  {
+    _finishHandler.push_back(Persistent<Function>::New(handler));
+  }
+  else if (tva_str_casecmp(evt, "error") == 0)
+  {
+    _errorHandler.push_back(Persistent<Function>::New(handler));
   }
 }
 
@@ -164,17 +136,18 @@ void Subscription::SetEventHandler(char* evt, Local<Function> handler)
 /*****     MessageEvent     *****/
 
 /*-----------------------------------------------------------------------------
- * Subscription message received callback
+ * Replay message received callback
  */
-void Subscription::MessageReceivedEvent(TVA_MESSAGE* message, void* context)
+void Replay::MessageReceivedEvent(TVA_MESSAGE* message, void* context)
 {
-  Subscription* subscription = (Subscription*)context;
+  Replay* replay = (Replay*)context;
   TVA_STATUS rc = TVA_ERROR;
 
   MessageEvent messageEvent;
   messageEvent.tvaMessage = message;
   messageEvent.generationTime = message->msgGenerationTime;
   messageEvent.receiveTime = message->msgReceiveTime;
+  messageEvent.isLastMessage = (TVA_MSG_ISLAST(message) != 0);
   tva_strncpy(messageEvent.topic, message->topicName, sizeof(messageEvent.topic));
 
   TVA_MESSAGE_DATA_HANDLE msgData = message->messageData;
@@ -331,37 +304,34 @@ void Subscription::MessageReceivedEvent(TVA_MESSAGE* message, void* context)
     }
   } while (0);
 
-  if (subscription->GetQos() != TVA_QOS_GUARANTEED_DELIVERY)
-  {
-    tvaReleaseMessageData(message);
-  }
+  tvaReleaseMessageData(message);
 
   if (rc == TVA_OK)
   {
-    subscription->PostMessageEvent(messageEvent);
+    replay->PostMessageEvent(messageEvent);
   }
 }
 
 /*-----------------------------------------------------------------------------
  * Post async message received event to JavaScript
  */
-void Subscription::MessageAsyncEvent(uv_async_t* async, int status)
+void Replay::MessageAsyncEvent(uv_async_t* async, int status)
 {
   HandleScope scope;
-  Subscription* subscription = (Subscription*)async->data;
+  Replay* replay = (Replay*)async->data;
   MessageEvent messageEvent;
 
   Local<Object> context = Context::GetCurrent()->Global();
-  while (subscription->GetNextMessageEvent(messageEvent))
+  while (replay->GetNextMessageEvent(messageEvent))
   {
-    subscription->InvokeJsMessageEvent(context, messageEvent);
+    replay->InvokeJsMessageEvent(context, messageEvent);
   }
 }
 
 /*-----------------------------------------------------------------------------
  * Post async message received event to JavaScript
  */
-void Subscription::InvokeJsMessageEvent(Local<Object> context, MessageEvent& messageEvent)
+void Replay::InvokeJsMessageEvent(Local<Object> context, MessageEvent& messageEvent)
 {
   size_t fieldCount = messageEvent.fieldData.size();
   Local<Object> fields = Object::New();
@@ -412,140 +382,93 @@ void Subscription::InvokeJsMessageEvent(Local<Object> context, MessageEvent& mes
     }
   }
 
-  if ((_qos == TVA_QOS_GUARANTEED_DELIVERY) && (_ackMode == GdSubscriptionAckModeAuto))
+  if (messageEvent.isLastMessage)
   {
-    tvagdMsgACK(messageEvent.tvaMessage);
+    for (size_t i = 0; i < _finishHandler.size(); i++)
+    {
+      TryCatch tryCatch;
+      _finishHandler[i]->Call(context, 1, argv);
+      if (tryCatch.HasCaught())
+      {
+        node::FatalException(tryCatch);
+      }
+    }
+
+    MarkInUse(false);
   }
 }
 
 
-/*****     AckMessage     *****/
-
-struct AckMessageRequest
-{
-  Subscription* subscription;
-  TVA_MESSAGE* tvaMessage;
-  TVA_STATUS result;
-  Persistent<Function> complete;
-};
+/*****     ReplayEvent     *****/
 
 /*-----------------------------------------------------------------------------
- * Acknowledge a received message when using "manual" ack mode with GD
- *
- * subscription.ackMessage(message, function (err) {
- *     // Message acknowledge complete
- * });
+ * Replay message received callback
  */
-Handle<Value> Subscription::AckMessage(const Arguments& args)
+void Replay::ReplayNotificationEvent(TVA_REPLAY_HANDLE replayHndl, void* context,
+                                     TVA_STATUS replayStatus, TVA_BOOLEAN replayHndlValid)
+{
+  Replay* replay = (Replay*)context;
+  replay->PostNotificationEvent(replayStatus);
+}
+
+/*-----------------------------------------------------------------------------
+ * Post async notification event to JavaScript
+ */
+void Replay::NotificationAsyncEvent(uv_async_t* async, int status)
 {
   HandleScope scope;
-  Subscription* subscription = ObjectWrap::Unwrap<Subscription>(args.This());
+  Replay* replay = (Replay*)async->data;
+  TVA_STATUS rc;
 
-  // Arguments checking
-  PARAM_REQ_NUM(2, args.Length());
-  PARAM_REQ_OBJECT(0, args);        // message
-  PARAM_REQ_FUNCTION(1, args);      // complete
-
-  // Ready arguments
-  Local<Object> message = Local<Object>::Cast(args[0]);
-  Local<Function> complete = Local<Function>::Cast(args[1]);
-  TVA_MESSAGE* tvaMessage = NULL;
-
-  // Look for the reserved field in the message
-  std::vector<std::string> fieldNames = cvv8::CastFromJS<std::vector<std::string> >(message->GetPropertyNames());
-  for (size_t i = 0; i < fieldNames.size(); i++)
+  Local<Object> context = Context::GetCurrent()->Global();
+  while (replay->GetNextNotificationEvent(rc))
   {
-    char* fieldName = (char*)(fieldNames[i].c_str());
-    if (tva_str_casecmp(fieldName, "reserved") == 0)
+    replay->InvokeJsNotificationEvent(context, rc);
+    replay->MarkInUse(false);
+  }
+}
+
+/*-----------------------------------------------------------------------------
+ * Post async notification event to JavaScript
+ */
+void Replay::InvokeJsNotificationEvent(Local<Object> context, TVA_STATUS rc)
+{
+  Handle<Value> argv[1];
+  argv[0] = String::New(tvaErrToStr(rc));
+
+  for (size_t i = 0; i < _errorHandler.size(); i++)
+  {
+    TryCatch tryCatch;
+    _errorHandler[i]->Call(context, 1, argv);
+    if (tryCatch.HasCaught())
     {
-      Local<Value> fieldValue = message->Get(String::NewSymbol(fieldName));
-      tvaMessage = (TVA_MESSAGE*)((intptr_t)fieldValue->NumberValue());
-      break;
+      node::FatalException(tryCatch);
     }
   }
-
-  if (tvaMessage == NULL)
-  {
-    ThrowException(Exception::TypeError(String::New("Invalid message")));
-    return scope.Close(args.This());
-  }
-
-  // Send data to worker thread
-  AckMessageRequest* request = new AckMessageRequest;
-  request->subscription = subscription;
-  request->tvaMessage = tvaMessage;
-  request->complete = Persistent<Function>::New(complete);
-
-  uv_work_t* req = new uv_work_t();
-  req->data = request;
-
-  uv_queue_work(uv_default_loop(), req, Subscription::AckWorker, Subscription::AckWorkerComplete);
-
-  return scope.Close(args.This());
-}
-
-/*-----------------------------------------------------------------------------
- * Perform GD message ACK
- */
-void Subscription::AckWorker(uv_work_t* req)
-{
-  AckMessageRequest* request = (AckMessageRequest*)req->data;
-  request->result = tvagdMsgACK(request->tvaMessage);
-}
-
-/*-----------------------------------------------------------------------------
- * GD message ACK complete
- */
-void Subscription::AckWorkerComplete(uv_work_t* req)
-{
-  HandleScope scope;
-
-  AckMessageRequest* request = (AckMessageRequest*)req->data;
-  delete req;
-
-  Handle<Value> argv[1];
-  if (request->result == TVA_OK)
-  {
-    argv[0] = Undefined();
-  }
-  else
-  {
-    argv[0] = String::New(tvaErrToStr(request->result));
-  }
-
-  TryCatch tryCatch;
-
-  request->complete->Call(Context::GetCurrent()->Global(), 1, argv);
-  request->complete.Dispose();
-  if (tryCatch.HasCaught())
-  {
-    node::FatalException(tryCatch);
-  }
-
-  delete request;
 }
 
 
-/*****     DeleteSubscription     *****/
+/*****     Pause/Resume     *****/
 
-struct SubscriptionStopRequest
+struct ReplayPauseResumeRequest
 {
-  Subscription* subscription;
+  Replay* replay;
+  bool isPause;
   TVA_STATUS result;
   Persistent<Function> complete;
 };
 
 /*-----------------------------------------------------------------------------
- * Stop the subscription
+ * Pause the replay
  *
- * subscription.stop(function (err) {
- *     // Subscription stop complete
+ * replay.pause(function (err) {
+ *     // Replay pause complete
  * });
  */
-Handle<Value> Subscription::Stop(const Arguments& args)
+Handle<Value> Replay::Pause(const Arguments& args)
 {
   HandleScope scope;
-  Subscription* subscription = ObjectWrap::Unwrap<Subscription>(args.This());
+  Replay* replay = ObjectWrap::Unwrap<Replay>(args.This());
 
   // Arguments checking
   PARAM_REQ_NUM(1, args.Length());
@@ -555,63 +478,76 @@ Handle<Value> Subscription::Stop(const Arguments& args)
   Local<Function> complete = Local<Function>::Cast(args[0]);
 
   // Send data to worker thread
-  SubscriptionStopRequest* request = new SubscriptionStopRequest;
-  request->subscription = subscription;
+  ReplayPauseResumeRequest* request = new ReplayPauseResumeRequest;
+  request->replay = replay;
+  request->isPause = true;
   request->complete = Persistent<Function>::New(complete);
 
   uv_work_t* req = new uv_work_t();
   req->data = request;
 
-  uv_queue_work(uv_default_loop(), req, Subscription::StopWorker, Subscription::StopWorkerComplete);
+  uv_queue_work(uv_default_loop(), req, Replay::PauseResumeWorker, Replay::PauseResumeWorkerComplete);
 
   return scope.Close(args.This());
 }
 
 /*-----------------------------------------------------------------------------
- * Perform delete subscription
+ * Resume the replay
+ *
+ * replay.resume(function (err) {
+ *     // Replay resume complete
+ * });
  */
-void Subscription::StopWorker(uv_work_t* req)
+Handle<Value> Replay::Resume(const Arguments& args)
 {
-  SubscriptionStopRequest* request = (SubscriptionStopRequest*)req->data;
-  request->result = request->subscription->Stop(false);
-}
+  HandleScope scope;
+  Replay* replay = ObjectWrap::Unwrap<Replay>(args.This());
 
-TVA_STATUS Subscription::Stop(bool sessionClosing)
-{
-  TVA_STATUS rc;
+  // Arguments checking
+  PARAM_REQ_NUM(1, args.Length());
+  PARAM_REQ_FUNCTION(0, args);        // complete
 
-  if (_qos == TVA_QOS_GUARANTEED_DELIVERY)
-  {
-    rc = tvagdSubTerm(_handle);
-  }
-  else
-  {
-    rc = tvaTerminateSubscription(_handle, TVA_INVALID_HANDLE);
-  }
+  // Ready arguments
+  Local<Function> complete = Local<Function>::Cast(args[0]);
 
-  if (!sessionClosing)
-  {
-    _session->RemoveSubscription(this);
-  }
+  // Send data to worker thread
+  ReplayPauseResumeRequest* request = new ReplayPauseResumeRequest;
+  request->replay = replay;
+  request->isPause = false;
+  request->complete = Persistent<Function>::New(complete);
 
-  if (_topic)
-  {
-    free(_topic);
-    _topic = NULL;
-  }
+  uv_work_t* req = new uv_work_t();
+  req->data = request;
 
-  _handle = TVA_INVALID_HANDLE;
-  return rc;
+  uv_queue_work(uv_default_loop(), req, Replay::PauseResumeWorker, Replay::PauseResumeWorkerComplete);
+
+  return scope.Close(args.This());
 }
 
 /*-----------------------------------------------------------------------------
- * Delete subscription complete
+ * Perform replay pause
  */
-void Subscription::StopWorkerComplete(uv_work_t* req)
+void Replay::PauseResumeWorker(uv_work_t* req)
+{
+  ReplayPauseResumeRequest* request = (ReplayPauseResumeRequest*)req->data;
+  if (request->isPause)
+  {
+    request->result = tvaReplayPause(request->replay->GetHandle());
+  }
+  else
+  {
+    request->result = tvaReplayResume(request->replay->GetHandle());
+  }
+}
+
+/*-----------------------------------------------------------------------------
+ * Replay pause complete
+ */
+void Replay::PauseResumeWorkerComplete(uv_work_t* req)
 {
   HandleScope scope;
 
-  SubscriptionStopRequest* request = (SubscriptionStopRequest*)req->data;
+  ReplayPauseResumeRequest* request = (ReplayPauseResumeRequest*)req->data;
   delete req;
 
   Handle<Value> argv[1];
@@ -633,11 +569,95 @@ void Subscription::StopWorkerComplete(uv_work_t* req)
     node::FatalException(tryCatch);
   }
 
-  request->subscription->MarkInUse(false);
+  delete request;
+}
+
+
+/*****     Stop     *****/
+
+struct ReplayStopRequest
+{
+  Replay* replay;
+  TVA_STATUS result;
+  Persistent<Function> complete;
+};
+
+/*-----------------------------------------------------------------------------
+ * Stop the replay
+ *
+ * replay.stop(function (err) {
+ *     // Replay stop complete
+ * });
+ */
+Handle<Value> Replay::Stop(const Arguments& args)
+{
+  HandleScope scope;
+  Replay* replay = ObjectWrap::Unwrap<Replay>(args.This());
+
+  // Arguments checking
+  PARAM_REQ_NUM(1, args.Length());
+  PARAM_REQ_FUNCTION(0, args);        // complete
+
+  // Ready arguments
+  Local<Function> complete = Local<Function>::Cast(args[0]);
+
+  // Send data to worker thread
+  ReplayStopRequest* request = new ReplayStopRequest;
+  request->replay = replay;
+  request->complete = Persistent<Function>::New(complete);
+
+  uv_work_t* req = new uv_work_t();
+  req->data = request;
+
+  uv_queue_work(uv_default_loop(), req, Replay::StopWorker, Replay::StopWorkerComplete);
+
+  return scope.Close(args.This());
+}
+
+/*-----------------------------------------------------------------------------
+ * Perform replay stop
+ */
+void Replay::StopWorker(uv_work_t* req)
+{
+  ReplayStopRequest* request = (ReplayStopRequest*)req->data;
+  request->result = tvaReplayRelease(request->replay->GetHandle());
+  request->replay->SetHandle(TVA_INVALID_HANDLE);
+}
+
+/*-----------------------------------------------------------------------------
+ * Replay stop complete
+ */
+void Replay::StopWorkerComplete(uv_work_t* req)
+{
+  HandleScope scope;
+
+  ReplayStopRequest* request = (ReplayStopRequest*)req->data;
+  delete req;
+
+  Handle<Value> argv[1];
+  if (request->result == TVA_OK)
+  {
+    argv[0] = Undefined();
+  }
+  else
+  {
+    argv[0] = String::New(tvaErrToStr(request->result));
+  }
+
+  TryCatch tryCatch;
+
+  request->complete->Call(Context::GetCurrent()->Global(), 1, argv);
+  request->complete.Dispose();
+  if (tryCatch.HasCaught())
+  {
+    node::FatalException(tryCatch);
+  }
+
+  request->replay->MarkInUse(false);
 
   delete request;
 }
 
-void Subscription::SubscriptionHandleCloseComplete(uv_handle_t* handle)
+void Replay::SubscriptionHandleCloseComplete(uv_handle_t* handle)
 {
 }

@@ -9,6 +9,7 @@
 #include "Session.h"
 #include "Publication.h"
 #include "Subscription.h"
+#include "Replay.h"
 
 using namespace v8;
 
@@ -17,8 +18,7 @@ using namespace v8;
  * Function prototypes
  */
 Handle<Value> Connect(const Arguments& args);
-void ConnectWorker(uv_work_t* req);
-void ConnectWorkerComplete(uv_work_t* req);
+Handle<Value> ConnectSync(const Arguments& args);
 
 
 /*-----------------------------------------------------------------------------
@@ -26,8 +26,8 @@ void ConnectWorkerComplete(uv_work_t* req);
  */
 void Init(Handle<Object> target)
 {
-  target->Set(String::NewSymbol("connect"), 
-    FunctionTemplate::New(Connect)->GetFunction());
+  target->Set(String::NewSymbol("connect"), FunctionTemplate::New(Connect)->GetFunction());
+  target->Set(String::NewSymbol("connectSync"), FunctionTemplate::New(ConnectSync)->GetFunction());
 }
 
 
@@ -45,7 +45,23 @@ struct ConnectRequest
   int timeout;
   TVA_STATUS result;
   Persistent<Function> complete;
+
+  ConnectRequest()
+  {
+    session = NULL;
+    username = NULL;
+    password = NULL;
+    primaryTmx = NULL;
+    secondaryTmx = NULL;
+    gdClientName = NULL;
+    gdMaxOut = 1000;
+    timeout = 30000;
+  }
 };
+
+bool ConnectParseOptions(Local<Object> options, ConnectRequest* request);
+void ConnectWorker(uv_work_t* req);
+void ConnectWorkerComplete(uv_work_t* req);
 
 /*-----------------------------------------------------------------------------
  * Create a new session and login to the Tervela fabric
@@ -77,14 +93,92 @@ Handle<Value> Connect(const Arguments& args)
   // Ready arguments
   Local<Object> options = Local<Object>::Cast(args[0]);
   Local<Function> complete = Local<Function>::Cast(args[1]);
-  char* username = NULL;
-  char* password = NULL;
-  char* primaryTmx = NULL;
-  char* secondaryTmx = NULL;
-  char* gdClientName = NULL;
-  int gdMaxOut = 1000;
-  int timeout = 30000;
 
+  ConnectRequest* request = new ConnectRequest();
+  request->complete = Persistent<Function>::New(complete);
+
+  // Make sure required arguments were specified
+  if (!ConnectParseOptions(options, request))
+  {
+    ThrowException(Exception::TypeError(String::New("Incomplete options")));
+    return scope.Close(Undefined());
+  }
+
+  // Post work request
+  uv_work_t* req = new uv_work_t();
+  req->data = request;
+
+  uv_queue_work(uv_default_loop(), req, ConnectWorker, ConnectWorkerComplete);
+
+  return scope.Close(Undefined());
+}
+
+/*-----------------------------------------------------------------------------
+ * Create a new session and login to the Tervela fabric
+ *
+ * var session = tervela.connect({connectOptions});
+ *
+ * connectOptions = {
+ *     username       : [API username],                         (string, required)
+ *     password       : [API password],                         (string, required)
+ *     primaryTmx     : [TMX name or address],                  (string, required)
+ *     secondaryTmx   : [TMX name or address],                  (string, optional (default: [empty]))
+ *     timeout        : [login timeout in seconds],             (integer, optional (default: 30))
+ *     name           : [client name for GD operations],        (string, only required when using GD)
+ *     gdMaxOut       : [GD publisher max outstanding]          (integer, only required when using GD (default: 1000))
+ * };
+ */
+Handle<Value> ConnectSync(const Arguments& args)
+{
+  HandleScope scope;
+
+  // Arguments checking
+  PARAM_REQ_NUM(1, args.Length());
+  PARAM_REQ_OBJECT(0, args);        // options
+
+  // Ready arguments
+  Local<Object> options = Local<Object>::Cast(args[0]);
+
+  ConnectRequest request;
+
+  // Make sure required arguments were specified
+  if (!ConnectParseOptions(options, &request))
+  {
+    ThrowException(Exception::TypeError(String::New("Incomplete options")));
+    return scope.Close(Undefined());
+  }
+
+  // Call ConnectWorker synchronously
+  uv_work_t req;
+  req.data = &request;
+  ConnectWorker(&req);
+
+  free(request.username);
+  free(request.password);
+  free(request.primaryTmx);
+  if (request.secondaryTmx) free(request.secondaryTmx);
+  if (request.gdClientName) free(request.gdClientName);
+
+  // Return result - Session object if successful, else error string
+  Handle<Value> result;
+  if (request.result == TVA_OK)
+  {
+    result = Local<Value>::New(Session::NewInstance(request.session));
+    request.session->MarkInUse(true);
+  }
+  else
+  {
+    result = String::New(tvaErrToStr(request.result));
+  }
+
+  return scope.Close(result);
+}
+
+/*-----------------------------------------------------------------------------
+ * Parse options
+ */
+bool ConnectParseOptions(Local<Object> options, ConnectRequest* request)
+{
   // Get options data
   std::vector<std::string> optionNames = cvv8::CastFromJS<std::vector<std::string> >(options->GetPropertyNames());
   for (size_t i = 0; i < optionNames.size(); i++)
@@ -100,62 +194,45 @@ Handle<Value> Connect(const Arguments& args)
     if (tva_str_casecmp(optionName, "username") == 0)
     {
       String::AsciiValue val(optionValue->ToString());
-      username = strdup(*val);
+      request->username = strdup(*val);
     }
     else if (tva_str_casecmp(optionName, "password") == 0)
     {
       String::AsciiValue val(optionValue->ToString());
-      password = strdup(*val);
+      request->password = strdup(*val);
     }
     else if (tva_str_casecmp(optionName, "primaryTmx") == 0)
     {
       String::AsciiValue val(optionValue->ToString());
-      primaryTmx = strdup(*val);
+      request->primaryTmx = strdup(*val);
     }
     else if (tva_str_casecmp(optionName, "secondaryTmx") == 0)
     {
       String::AsciiValue val(optionValue->ToString());
-      secondaryTmx = strdup(*val);
+      request->secondaryTmx = strdup(*val);
     }
     else if (tva_str_casecmp(optionName, "name") == 0)
     {
       String::AsciiValue val(optionValue->ToString());
-      gdClientName = strdup(*val);
+      request->gdClientName = strdup(*val);
     }
     else if (tva_str_casecmp(optionName, "timeout") == 0)
     {
-      timeout = optionValue->Int32Value() * 1000;
+      request->timeout = optionValue->Int32Value() * 1000;
     }
     else if (tva_str_casecmp(optionName, "gdMaxOut") == 0)
     {
-      gdMaxOut = optionValue->Int32Value();
+      request->gdMaxOut = optionValue->Int32Value();
     }
   }
 
   // Make sure required arguments were specified
-  if (!username || !password || !primaryTmx)
+  if (!request->username || !request->password || !request->primaryTmx)
   {
-    ThrowException(Exception::TypeError(String::New("Incomplete options")));
-    return scope.Close(Undefined());
+    return false;
   }
 
-  // Send data to worker thread
-  ConnectRequest* request = new ConnectRequest;
-  request->complete = Persistent<Function>::New(complete);
-  request->username = username;
-  request->password = password;
-  request->primaryTmx = primaryTmx;
-  request->secondaryTmx = secondaryTmx;
-  request->gdClientName = gdClientName;
-  request->timeout = timeout;
-  request->gdMaxOut = gdMaxOut;
-
-  uv_work_t* req = new uv_work_t();
-  req->data = request;
-
-  uv_queue_work(uv_default_loop(), req, ConnectWorker, ConnectWorkerComplete);
-
-  return scope.Close(Undefined());
+  return true;
 }
 
 /*-----------------------------------------------------------------------------
@@ -178,6 +255,8 @@ void ConnectWorker(uv_work_t* req)
 
     rc = tvaSessionLogin(sessionHandle, request->username, request->password, request->primaryTmx, request->secondaryTmx, request->timeout);
     if (rc != TVA_OK) break;
+
+    tvaSrvcInitPE(sessionHandle, Replay::ReplayNotificationEvent);
 
     if (request->gdClientName)
     {
@@ -236,6 +315,7 @@ void ConnectWorkerComplete(uv_work_t* req)
   {
     argv[0] = Undefined();
     argv[1] = Local<Value>::New(Session::NewInstance(request->session));
+    request->session->MarkInUse(true);
   }
   else
   {
@@ -251,8 +331,6 @@ void ConnectWorkerComplete(uv_work_t* req)
   {
     node::FatalException(tryCatch);
   }
-
-  uv_async_init(uv_default_loop(), request->session->GetAsyncObj(), Session::SessionNotificationAsyncEvent);
 
   free(request->username);
   free(request->password);
@@ -272,6 +350,7 @@ extern "C" {
     Session::Init(target);
     Publication::Init(target);
     Subscription::Init(target);
+    Replay::Init(target);
   }
 
   NODE_MODULE(tervela, init);

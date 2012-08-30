@@ -2,6 +2,7 @@
 
 #include <queue>
 #include <vector>
+#include <list>
 #include <v8.h>
 #include <node.h>
 #include "DataTypes.h"
@@ -11,6 +12,7 @@
 #include "compat.h"
 
 class Publication;
+class Subscription;
 
 struct GdAckWindowEntry
 {
@@ -66,11 +68,65 @@ public:
   static v8::Handle<v8::Value> CreatePublication(const v8::Arguments& args);
 
   /*-----------------------------------------------------------------------------
+   * Create a new publication (synchronous)
+   *
+   * var pub = session.createPublication(topic);
+   */
+  static v8::Handle<v8::Value> CreatePublicationSync(const v8::Arguments& args);
+
+  /*-----------------------------------------------------------------------------
    * Create a new subscription
    *
-   * var sub = session.createSubscription();
+   * session.createSubscription(topic, {options}, function (err, sub) {
+   *     // Create subscription complete
+   * });
+   *
+   * options = {
+   *    qos           : [quality of service: 'BE'|'GC'|'GD'],   (string, optional (default: 'GC'))
+   *    name          : [subscription name],                    (string, only required when using GD)
+   *    ackMode       : [message ack mode: 'auto'|'manual'],    (string, only required when using GD)
+   * };
    */
   static v8::Handle<v8::Value> CreateSubscription(const v8::Arguments& args);
+
+  /*-----------------------------------------------------------------------------
+   * Create a new subscription (synchronous)
+   *
+   * var sub = session.createSubscription(topic, {options});
+   *
+   * options = {
+   *    qos           : [quality of service: 'BE'|'GC'|'GD'],   (string, optional (default: 'GC'))
+   *    name          : [subscription name],                    (string, only required when using GD)
+   *    ackMode       : [message ack mode: 'auto'|'manual'],    (string, only required when using GD)
+   * };
+   */
+  static v8::Handle<v8::Value> CreateSubscriptionSync(const v8::Arguments& args);
+
+  /*-----------------------------------------------------------------------------
+   * Create a new replay
+   *
+   * session.createReplay(topic, {options}, function (err, replay) {
+   *     // Create replay complete
+   * });
+   *
+   * options = {
+   *    startTime     : [beginning of the time range]           (Date, required)
+   *    endTime       : [end of the time range]                 (Date, required)
+   * };
+   */
+  static v8::Handle<v8::Value> CreateReplay(const v8::Arguments& args);
+
+  /*-----------------------------------------------------------------------------
+   * Create a new replay (synchronous)
+   *
+   * var replay = session.createReplaySync(topic, {options});
+   *
+   * options = {
+   *    startTime     : [beginning of the time range]           (Date, required)
+   *    endTime       : [end of the time range]                 (Date, required)
+   * };
+   */
+  static v8::Handle<v8::Value> CreateReplaySync(const v8::Arguments& args);
 
 
   /* Internal methods */
@@ -79,6 +135,7 @@ public:
 
   TVA_STATUS SendGdMessage(Publication* publisher, TVA_PUBLISH_MESSAGE_DATA_HANDLE messageData, v8::Persistent<v8::Function> complete);
   TVA_STATUS Terminate();
+  void TerminateComplete();
 
   inline uv_async_t* GetAsyncObj() { return &_async; }
   inline TVA_SESSION_HANDLE GetHandle() { return _handle; }
@@ -98,6 +155,17 @@ public:
   static v8::Handle<v8::Value> NewInstance(Session* session);
   static void SessionNotificationCallback(void* context, TVA_STATUS code, void* data);
   static void SessionNotificationAsyncEvent(uv_async_t* async, int status);
+
+  void AddSubscription(Subscription* subscription)
+  {
+    _subscriptionList.push_back(subscription);
+  }
+  void RemoveSubscription(Subscription* subscription)
+  {
+    _subscriptionList.remove(subscription);
+  }
+
+  v8::Local<v8::Object> CreateSubscriptionTable();
 
   void SetEventHandler(char* evt, v8::Local<v8::Function> handler);
 
@@ -125,6 +193,23 @@ public:
     return result;
   }
 
+  inline bool IsInUse() { return _isInUse; }
+  inline void MarkInUse(bool inUse)
+  {
+    _isInUse = inUse;
+    if (inUse)
+    {
+      Ref();
+      uv_async_init(uv_default_loop(), GetAsyncObj(), Session::SessionNotificationAsyncEvent);
+    }
+    else
+    {
+      uv_close((uv_handle_t*)GetAsyncObj(), Session::SessionHandleCloseComplete);
+      Unref();
+      MakeWeak();
+    }
+  }
+
 private:
   static void ConnectWorker(uv_work_t* req);
   static void ConnectWorkerComplete(uv_work_t* req);
@@ -132,6 +217,10 @@ private:
   static void CloseWorkerComplete(uv_work_t* req);
   static void CreatePublicationWorker(uv_work_t* req);
   static void CreatePublicationWorkerComplete(uv_work_t* req);
+  static void CreateSubscriptionWorker(uv_work_t* req);
+  static void CreateSubscriptionWorkerComplete(uv_work_t* req);
+  static void CreateReplayWorker(uv_work_t* req);
+  static void CreateReplayWorkerComplete(uv_work_t* req);
   static void SessionHandleCloseComplete(uv_handle_t* handle);
   void InvokeJsSessionNotification(v8::Local<v8::Object> context, SessionNotificaton& notificationEvent);
 
@@ -142,6 +231,8 @@ private:
   uv_async_t _async;
   std::queue<SessionNotificaton> _sessionEventQueue;
   uv_mutex_t _sessionEventLock;
+
+  std::list<Subscription*> _subscriptionList;
 
   std::vector< v8::Persistent<v8::Function> > _disconnectHandler;
   std::vector< v8::Persistent<v8::Function> > _reconnectHandler;
@@ -155,4 +246,5 @@ private:
   GdAckWindowEntry* _gdAckWindow;
   int _gdAckWindowSize;
   int _gdAckWindowIdx;
+  bool _isInUse;
 };

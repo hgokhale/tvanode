@@ -61,6 +61,10 @@ Publication::Publication(Session* session)
 
 Publication::~Publication()
 {
+  if (_handle != TVA_INVALID_HANDLE)
+  {
+    tvaCancelPublication(_handle, TVA_INVALID_HANDLE);
+  }
   uv_mutex_destroy(&_sendLock);
 }
 
@@ -281,7 +285,7 @@ void Publication::SendMessageWorker(uv_work_t* req)
       }
       else
       {
-/* Tervela API versions prior to 5.1.0 don't include tvaSendMessageEx */
+        /* Tervela API versions prior to 5.1.0 don't include tvaSendMessageEx */
 #ifdef TVA_PUB_FL_NOBLOCK
         rc = tvaSendMessageEx(messageData, TVA_PUB_FL_NOBLOCK);
 #else

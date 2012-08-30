@@ -41,4 +41,5 @@ struct MessageEvent
   TVA_UINT64 generationTime;
   TVA_UINT64 receiveTime;
   std::vector<MessageFieldData> fieldData;
+  bool isLastMessage;
 };

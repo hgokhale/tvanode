@@ -129,9 +129,20 @@ else {
             return;
         }
 
-        session.on('notify', function (code, msg) {
-            console.log("* Session notification %d : %s", code, msg);
-        });
+        session
+            .on('connect-info', function (activeTmx, standbyTmx) {
+                var info = "* Session connected to active TMX " + activeTmx;
+                if (standbyTmx) {
+                    info += ", standby TMX " + standbyTmx;
+                }
+                console.log(info);
+            })
+            .on('gds-lost', function () {
+                console.log("* Lost communications with the GDS, GD operations affected");
+            })
+            .on('gds-restored', function () {
+                console.log("* Communications with the GDS have been restored, GD operations will continue");
+            });
 
         console.log("Login complete");
 
@@ -220,15 +231,15 @@ function messageThread(pub, baseTopic) {
             pub.sendMessage(topic, message, { selfdescribe: true }, function (err) {
                 _messagesOutstanding--;
                 if (err) {
-                    _totalSentMessages++;
-                    if (_verbose) {
-                        console.log("Sent message %d", _totalSentMessages);
-                    }
-                }
-                else {
                     _totalSendErrors++;
                     if (_verbose) {
                         console.log("Error sending on %s: %s", topic, err);
+                    }
+                }
+                else {
+                    _totalSentMessages++;
+                    if (_verbose) {
+                        console.log("Sent message %d", _totalSentMessages);
                     }
                 }
             });

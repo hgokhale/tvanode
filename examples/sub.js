@@ -141,9 +141,20 @@ else {
             return;
         }
 
-        session.on('notify', function (code, msg) {
-            console.log("* Session notification %d : %s", code, msg);
-        });
+        session
+            .on('connect-info', function (activeTmx, standbyTmx) {
+                var info = "* Session connected to active TMX " + activeTmx;
+                if (standbyTmx) {
+                    info += ", standby TMX " + standbyTmx;
+                }
+                console.log(info);
+            })
+            .on('gds-lost', function () {
+                console.log("* Lost communications with the GDS, GD operations affected");
+            })
+            .on('gds-restored', function () {
+                console.log("* Communications with the GDS have been restored, GD operations will continue");
+            });
 
         console.log("Login complete");
 
@@ -183,67 +194,66 @@ var _lastRecvDate;
 
 var _subCreateCount = 0;
 function startSubscription(session, topic, subscriptions, topics, maxCount) {
-    var sub = session.createSubscription();
-    sub.start(topic, { qos: _qos, name: _subName, ackMode: _ackMode })
-        .on('message', function (msg) {
-            _totalRecvMessages++;
-            if (!_firstRecvDate) {
-                _firstRecvDate = new Date();
-            }
-            _lastRecvDate = new Date();
-            if (_verbose) {
-                console.log("  Processing message %s", msg.topic);
-                for (var fieldName in msg.fields) {
-                    var fieldData = msg.fields[fieldName];
-                    var fieldType = "???";
-
-                    if (typeof fieldData === "number") {
-                        fieldType = "NUMBER";
-                    }
-                    else if (typeof fieldData === "string") {
-                        fieldType = "STRING";
-                    }
-                    else if (typeof fieldData === "boolean") {
-                        fieldType = "BOOLEAN";
-                    }
-                    else if (typeof fieldData === "object") {
-                        if (fieldData.constructor == (new Date).constructor) {
-                            fieldType = "DATE";
-                        }
-                    }
-                    console.log("  => %s:%s = " + fieldData, fieldType, fieldName);
+    session.createSubscription(topic, { qos: _qos, name: _subName, ackMode: _ackMode }, function (err, sub) {
+        if (err) {
+            console.log("Error creating subscription on " + topic + ": " + err);
+            subscriptions.push(undefined);
+            topics.push(undefined);
+        }
+        else {
+            sub.on('message', function (msg) {
+                _totalRecvMessages++;
+                if (!_firstRecvDate) {
+                    _firstRecvDate = new Date();
                 }
-            }
+                _lastRecvDate = new Date();
+                if (_verbose) {
+                    console.log("  Processing message %s", msg.topic);
+                    for (var fieldName in msg.fields) {
+                        var fieldData = msg.fields[fieldName];
+                        var fieldType = "???";
 
-            if (_ackMode == "manual") {
-                sub.ackMessage(msg, function (err) {
-                    if (_verbose) {
-                        if (err) {
-                            console.log("   -- Message ACK error: " + err);
+                        if (typeof fieldData === "number") {
+                            fieldType = "NUMBER";
                         }
-                        else {
-                            console.log("   -- Message ACK complete");
+                        else if (typeof fieldData === "string") {
+                            fieldType = "STRING";
                         }
+                        else if (typeof fieldData === "boolean") {
+                            fieldType = "BOOLEAN";
+                        }
+                        else if (typeof fieldData === "object") {
+                            if (fieldData.constructor == (new Date).constructor) {
+                                fieldType = "DATE";
+                            }
+                        }
+                        console.log("  => %s:%s = " + fieldData, fieldType, fieldName);
                     }
-                });
-            }
-        })
-        .on('start', function (err) {
-            if (!err) {
-                console.log("Created subscription on " + topic);
-                subscriptions.push(sub);
-                topics.push(topic);
-            }
-            else {
-                console.log("Error creating subscription on " + topic + ": " + err);
-                subscriptions.push(undefined);
-                topics.push(undefined);
-            }
+                }
+
+                if (_ackMode == "manual") {
+                    sub.ackMessage(msg, function (err) {
+                        if (_verbose) {
+                            if (err) {
+                                console.log("   -- Message ACK error: " + err);
+                            }
+                            else {
+                                console.log("   -- Message ACK complete");
+                            }
+                        }
+                    });
+                }
+            });
+
+            console.log("Created subscription on " + topic);
+            subscriptions.push(sub);
+            topics.push(topic);
 
             if (++_subCreateCount == maxCount) {
                 setTimeout(function () { mainLoop(session, subscriptions, topics); }, 10);
             }
-        });
+        }
+    });
 }
 
 function mainLoop(session, subscriptions, topics) {

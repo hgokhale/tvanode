@@ -3,7 +3,9 @@
 
 #ifdef MISSING_UV_THREADS
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int uv_mutex_init(uv_mutex_t* mutex) {
 #ifdef NDEBUG
@@ -32,14 +34,26 @@ int uv_mutex_init(uv_mutex_t* mutex) {
 
 
 void uv_mutex_destroy(uv_mutex_t* mutex) {
-  if (pthread_mutex_destroy(mutex))
+  int r;
+
+  r = pthread_mutex_destroy(mutex);
+
+  if (r) {
+    fprintf(stderr, "%s: %s\n", __FUNCTION__, strerror(r));
     abort();
+  }
 }
 
 
 void uv_mutex_lock(uv_mutex_t* mutex) {
-  if (pthread_mutex_lock(mutex))
+  int r;
+
+  r = pthread_mutex_lock(mutex);
+
+  if (r) {
+    fprintf(stderr, "%s: %s\n", __FUNCTION__, strerror(r));
     abort();
+  }
 }
 
 
@@ -48,8 +62,10 @@ int uv_mutex_trylock(uv_mutex_t* mutex) {
 
   r = pthread_mutex_trylock(mutex);
 
-  if (r && r != EAGAIN)
+  if (r && r != EAGAIN) {
+    fprintf(stderr, "%s: %s\n", __FUNCTION__, strerror(r));
     abort();
+  }
 
   if (r)
     return -1;
@@ -59,8 +75,14 @@ int uv_mutex_trylock(uv_mutex_t* mutex) {
 
 
 void uv_mutex_unlock(uv_mutex_t* mutex) {
-  if (pthread_mutex_unlock(mutex))
+  int r;
+
+  r = pthread_mutex_unlock(mutex);
+
+  if (r) {
+    fprintf(stderr, "%s: %s\n", __FUNCTION__, strerror(r));
     abort();
+  }
 }
 
 #endif

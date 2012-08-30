@@ -106,7 +106,7 @@ else {
         secondaryTmx: secondaryTmx
     }, function (err, session) {
         if (err) {
-            console.log("Login failed: " + err);
+            console.log("Session connect failed: " + err);
             return;
         }
 
@@ -114,60 +114,53 @@ else {
             console.log("* Session notification %d : %s", code, msg);
         });
 
-        console.log("Login complete");
+        console.log("Session connected");
 
         var subscription, publication;
 
-        // Create subscription
-        subscription = session.createSubscription();
-        subscription
-            .start(topic, { qos: 'BE' })
-            .on('message', function (msg) {
-                try {
-                    var lat = msg.fields["time"];
-                    var now = new Date();
-                    var diff = now.getTime() - lat.getTime();
-                    latencies.push(diff);
+        // Create subscription and publication
+        subscription = session.createSubscriptionSync(topic, { qos: 'BE' });
+        if (typeof subscription === "string") {
+            console.log("Error creating subscription to " + topic + ": " + subscription);
+            setTimeout(function () { shutdown(session); }, 10);
+            return;
+        }
+        console.log("Start subscription complete");
 
-                    if (verbose) {
-                        console.log("RX: %d : %d %d (%d)", rxcount, now, lat, diff);
-                    }
+        publication = session.createPublicationSync(topic);
+        if (typeof publication === "string") {
+            console.log("Error creating publication to " + topic + ": " + publication);
+            setTimeout(function () { shutdown(session); }, 10);
+            return;
+        }
+        console.log("Start publication complete");
 
-                    rxcount++;
-                    if (rxcount == count) {
-                        testComplete(subscription, publication, session);
-                    }
-                }
-                catch (e) {
-                    console.log("messageEvent: Caught exception: " + e.message);
-                    console.log(e.stack);
-                }
-            })
-            .on('start', function (err) {
-                if (err) {
-                    console.log("Error creating subscription to " + topic + ": " + err);
-                    setTimeout(function () { shutdown(subscription, publication, session); }, 10);
-                    return;
+        // Set up event listener for message events
+        subscription.on('message', function (msg) {
+            try {
+                var lat = msg.fields["time"];
+                var now = new Date();
+                var diff = now.getTime() - lat.getTime();
+                latencies.push(diff);
+
+                if (verbose) {
+                    console.log("RX: %d : %d %d (%d)", rxcount, now, lat, diff);
                 }
 
-                console.log("Start subscription complete");
+                rxcount++;
+                if (rxcount == count) {
+                    testComplete(session);
+                }
+            }
+            catch (e) {
+                console.log("messageEvent: Caught exception: " + e.message);
+                console.log(e.stack);
+            }
+        });
 
-                // Create publication
-                session.createPublication(topic, function (err, pub) {
-                    if (err) {
-                        console.log("Error creating publication to " + topic + ": " + err);
-                        setTimeout(function () { shutdown(subscription, publication, session); }, 10);
-                        return;
-                    }
-
-                    publication = pub;
-
-                    console.log("Start publication complete");
-                    startTime = new Date();
-
-                    setTimeout(function () { sendMessage(pub); }, delay);
-                });
-            });
+        // Start
+        startTime = new Date();
+        setTimeout(function () { sendMessage(publication); }, delay);
     });
 }
 
@@ -192,9 +185,7 @@ function sendMessage(publication) {
             setTimeout(function () { sendMessage(publication); }, delay);
         }
         else {
-            // Need to keep the script running while we wait for all 
-            // messages to be received
-            setTimeout(waitForCompletion, 500);
+            console.log("Done sending messages");
         }
     }
     catch (e) {
@@ -203,13 +194,7 @@ function sendMessage(publication) {
     }
 }
 
-function waitForCompletion() {
-    if (!testingComplete) {
-        setTimeout(waitForCompletion, 500);
-    }
-}
-
-function testComplete(subscription, publication, session) {
+function testComplete(session) {
     endTime = new Date();
     var duration = endTime.getTime() - startTime.getTime();
     
@@ -227,38 +212,13 @@ function testComplete(subscription, publication, session) {
     console.log("* Count:%d  min:%d  max:%d  mean:%d  runtime:%d", latencies.length, min, max, mean, duration);
     console.log(" ");
 
-    shutdown(subscription, publication, session);
+    shutdown(session);
     testingComplete = true;
 }
 
-function shutdown(subscription, publication, session) {
-    if (publication) {
-        shutdownPublication(subscription, publication, session);
-    }
-    else if (subscription) {
-        shutdownSubscription(subscription, session);
-    }
-    else {
-        shutdownSession(session);
-    }
-}
-
-function shutdownPublication(subscription, publication, session) {
-    publication.stop(function (err) {
-        console.log("Stop publication complete");
-        shutdownSubscription(subscription, session);
-    });
-}
-
-function shutdownSubscription(subscription, session) {
-    subscription.stop(function (err) {
-        console.log("Stop subscription complete");
-        shutdownSession(session);
-    });
-}
-
-function shutdownSession(session) {
-    session.close(function (err) { console.log("Logout complete"); });
+function shutdown(session) {
+    // Closing the session also closes the publication and subscription
+    session.close(function (err) { console.log("Session close complete"); });
 }
 
 function printUsage() {

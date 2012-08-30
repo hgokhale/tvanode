@@ -30,11 +30,14 @@
     <ClCompile Include="src\Tervela.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\Replay.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Session_Create.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="test\ut_direct.js">
-      <Filter>Test Scripts</Filter>
-    </None>
     <None Include="binding.gyp">
       <Filter>Resource Files</Filter>
     </None>
@@ -56,6 +59,15 @@
     <None Include="examples\sub.js">
       <Filter>Test Scripts</Filter>
     </None>
+    <None Include="examples\replay.js">
+      <Filter>Test Scripts</Filter>
+    </None>
+    <None Include="test\ut_sync.js">
+      <Filter>Test Scripts</Filter>
+    </None>
+    <None Include="test\ut_async.js">
+      <Filter>Test Scripts</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\UvWorkerPool.h">
@@ -74,6 +86,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\Helpers.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Replay.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

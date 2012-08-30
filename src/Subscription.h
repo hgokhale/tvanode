@@ -17,24 +17,11 @@ public:
   };
 
   /*-----------------------------------------------------------------------------
-   * Start the subscription, get ready to receive messages
-   *
-   * subscription.start(topic, {options});
-   * options = {
-   *    qos           : [quality of service: "BE"|"GC"|"GD"],   (string, optional (default: "GC"))
-   *    name          : [subscription name],                    (string, only required when using GD)
-   *    ackMode       : [message ack mode: "auto"|"manual"],    (string, only required when using GD)
-   * };
-   */
-  static v8::Handle<v8::Value> Start(const v8::Arguments& args);
-
-  /*-----------------------------------------------------------------------------
    * Register for subscription events
    *
-   * session.on(event, listener);
+   * subscription.on(event, listener);
    *
    * Events / Listeners:
-   *   'started'              - Subscription started                    - function (err) { }
    *   'message'              - Message received                        - function (message) { }
    *
    * message = {
@@ -71,20 +58,16 @@ public:
 
   static void Init(v8::Handle<v8::Object> target);
   static v8::Handle<v8::Value> New(const v8::Arguments& args);
-  static v8::Handle<v8::Value> NewInstance(const v8::Local<v8::Object> session);
+  static v8::Handle<v8::Value> NewInstance(Subscription* subscription);
 
   void SetEventHandler(char* evt, v8::Local<v8::Function> handler);
 
   inline Session* GetSession() { return _session; };
   inline uv_async_t* GetAsyncObj() { return &_async; }
 
-  inline void SetHandle(TVA_SUBSCRIPTION_HANDLE handle) { _handle = handle; }
   inline TVA_SUBSCRIPTION_HANDLE GetHandle() { return _handle; }
-
-  inline void SetQos(TVA_UINT32 qos) { _qos = qos; }
+  inline char* GetTopic() { return _topic; }
   inline TVA_UINT32 GetQos() { return _qos; }
-
-  inline void SetAckMode(GdSubscriptionAckMode ackMode) { _ackMode = ackMode; }
   inline GdSubscriptionAckMode GetAckMode() { return _ackMode; }
 
   inline void PostMessageEvent(MessageEvent& messageEvent)
@@ -111,7 +94,26 @@ public:
     return result;
   }
 
-  void InvokeJsStartEvent(v8::Local<v8::Object> context, TVA_STATUS rc);
+  inline bool IsInUse() { return _isInUse; }
+  inline void MarkInUse(bool inUse)
+  {
+    _isInUse = inUse;
+    if (inUse)
+    {
+      Ref();
+      uv_async_init(uv_default_loop(), GetAsyncObj(), Subscription::MessageAsyncEvent);
+    }
+    else
+    {
+      uv_close((uv_handle_t*)GetAsyncObj(), Subscription::SubscriptionHandleCloseComplete);
+
+      Unref();
+      MakeWeak();
+    }
+  }
+
+  TVA_STATUS Start(char* topic, uint8_t qos, char* name, GdSubscriptionAckMode gdAckMode);
+  TVA_STATUS Stop(bool sessionClosing);
 
 private:
   static void StartWorker(uv_work_t* req);
@@ -130,10 +132,11 @@ private:
   Session* _session;
   TVA_SUBSCRIPTION_HANDLE _handle;
   uv_async_t _async;
-  std::vector< v8::Persistent<v8::Function> > _startHandler;
   std::vector< v8::Persistent<v8::Function> > _messageHandler;
   std::queue<MessageEvent> _messageEventQueue;
   uv_mutex_t _messageEventLock;
+  char* _topic;
   TVA_UINT32 _qos;
   GdSubscriptionAckMode _ackMode;
+  bool _isInUse;
 };

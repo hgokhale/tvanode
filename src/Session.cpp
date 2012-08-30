@@ -6,6 +6,7 @@
 #include "Session.h"
 #include "Publication.h"
 #include "Subscription.h"
+#include "Replay.h"
 
 using namespace v8;
 
@@ -25,7 +26,11 @@ void Session::Init(Handle<Object> target)
   t->PrototypeTemplate()->Set(String::NewSymbol("on"), FunctionTemplate::New(On)->GetFunction());
   t->PrototypeTemplate()->Set(String::NewSymbol("close"), FunctionTemplate::New(Close)->GetFunction());
   t->PrototypeTemplate()->Set(String::NewSymbol("createPublication"), FunctionTemplate::New(CreatePublication)->GetFunction());
+  t->PrototypeTemplate()->Set(String::NewSymbol("createPublicationSync"), FunctionTemplate::New(CreatePublicationSync)->GetFunction());
   t->PrototypeTemplate()->Set(String::NewSymbol("createSubscription"), FunctionTemplate::New(CreateSubscription)->GetFunction());
+  t->PrototypeTemplate()->Set(String::NewSymbol("createSubscriptionSync"), FunctionTemplate::New(CreateSubscriptionSync)->GetFunction());
+  t->PrototypeTemplate()->Set(String::NewSymbol("createReplay"), FunctionTemplate::New(CreateReplay)->GetFunction());
+  t->PrototypeTemplate()->Set(String::NewSymbol("createReplaySync"), FunctionTemplate::New(CreateReplaySync)->GetFunction());
 
   constructor = Persistent<Function>::New(t->GetFunction());
 }
@@ -78,6 +83,36 @@ Session::~Session()
   {
     delete[] _gdAckWindow;
   }
+
+  for (size_t i = 0; i < _disconnectHandler.size(); i++)
+  {
+    _disconnectHandler[i].Dispose();
+  }
+  for (size_t i = 0; i < _reconnectHandler.size(); i++)
+  {
+    _reconnectHandler[i].Dispose();
+  }
+  for (size_t i = 0; i < _terminateHandler.size(); i++)
+  {
+    _terminateHandler[i].Dispose();
+  }
+  for (size_t i = 0; i < _connInfoHandler.size(); i++)
+  {
+    _connInfoHandler[i].Dispose();
+  }
+  for (size_t i = 0; i < _gdsLostHandler.size(); i++)
+  {
+    _gdsLostHandler[i].Dispose();
+  }
+  for (size_t i = 0; i < _gdsRestoreHandler.size(); i++)
+  {
+    _gdsRestoreHandler[i].Dispose();
+  }
+  for (size_t i = 0; i < _defaultHandler.size(); i++)
+  {
+    _defaultHandler[i].Dispose();
+  }
+
   uv_mutex_destroy(&_sessionEventLock);
   uv_mutex_destroy(&_gdSendLock);
 }
@@ -212,6 +247,14 @@ TVA_STATUS Session::Terminate()
 {
   TVA_STATUS rc;
 
+  std::list<Subscription*>::iterator subIterator;
+  for (subIterator = _subscriptionList.begin(); 
+       subIterator != _subscriptionList.end(); 
+       subIterator++)
+  {
+    (*subIterator)->Stop(true);
+  }
+
   if (_gdHandle != TVA_INVALID_HANDLE)
   {
     tvagdContextTerm(_gdHandle);
@@ -231,6 +274,22 @@ TVA_STATUS Session::Terminate()
 }
 
 /*-----------------------------------------------------------------------------
+ * Close completing, cleanup node.js objects
+ */
+void Session::TerminateComplete()
+{
+  std::list<Subscription*>::iterator subIterator;
+  for (subIterator = _subscriptionList.begin(); 
+       subIterator != _subscriptionList.end(); 
+       subIterator++)
+  {
+    (*subIterator)->MarkInUse(false);
+  }
+
+  MarkInUse(false);
+}
+
+/*-----------------------------------------------------------------------------
  * Close complete
  */
 void Session::CloseWorkerComplete(uv_work_t* req)
@@ -239,6 +298,8 @@ void Session::CloseWorkerComplete(uv_work_t* req)
 
   CloseRequest* request = (CloseRequest*)req->data;
   delete req;
+
+  request->session->TerminateComplete();
 
   Handle<Value> argv[1];
   if (request->result == TVA_OK)
@@ -455,24 +516,7 @@ void Session::InvokeJsSessionNotification(Local<Object> context, SessionNotifica
     handled = (bool)(_terminateHandler.size() > 0);
 
     // Perform cleanup
-    uv_close((uv_handle_t*)GetAsyncObj(), Session::SessionHandleCloseComplete);
-
-    for (size_t i = 0; i < _disconnectHandler.size(); i++)
-    {
-      _disconnectHandler[i].Dispose();
-    }
-    for (size_t i = 0; i < _reconnectHandler.size(); i++)
-    {
-      _reconnectHandler[i].Dispose();
-    }
-    for (size_t i = 0; i < _terminateHandler.size(); i++)
-    {
-      _terminateHandler[i].Dispose();
-    }
-    for (size_t i = 0; i < _defaultHandler.size(); i++)
-    {
-      _defaultHandler[i].Dispose();
-    }
+    MarkInUse(false);
   }
   
   if (!handled)
@@ -499,139 +543,6 @@ void Session::InvokeJsSessionNotification(Local<Object> context, SessionNotifica
  */
 void Session::SessionHandleCloseComplete(uv_handle_t* handle)
 {
-}
-
-/*-----------------------------------------------------------------------------
- * Create a new subscription object
- */
-Handle<Value> Session::CreateSubscription(const Arguments& args)
-{
-  HandleScope scope;
-  return scope.Close(Subscription::NewInstance(args.This()));
-}
-
-/*****     Start     *****/
-
-struct CreatePublicationRequest
-{
-  Session* session;
-  Publication* publication;
-  char* topic;
-  TVA_STATUS result;
-  Persistent<Function> complete;
-};
-
-/*-----------------------------------------------------------------------------
- * Create a new publication
- *
- * session.createPublication(topic, function (err, pub) {
- *     // Create publication complete
- * });
- */
-Handle<Value> Session::CreatePublication(const Arguments& args)
-{
-  HandleScope scope;
-  Session* session = ObjectWrap::Unwrap<Session>(args.This());
-
-  // Arguments checking
-  PARAM_REQ_NUM(2, args.Length());
-  PARAM_REQ_STRING(0, args);        // topic
-  PARAM_REQ_FUNCTION(1, args);      // 'complete' callback
-
-  String::AsciiValue topic(args[0]->ToString());
-  Local<Function> complete = Local<Function>::Cast(args[1]);
-
-  // Send data to worker thread
-  CreatePublicationRequest* request = new CreatePublicationRequest;
-  request->session = session;
-  request->topic = strdup(*topic);
-  request->complete = Persistent<Function>::New(complete);
-
-  uv_work_t* req = new uv_work_t();
-  req->data = request;
-
-  uv_queue_work(uv_default_loop(), req, Session::CreatePublicationWorker, Session::CreatePublicationWorkerComplete);
-
-  return scope.Close(args.This());
-}
-
-/*-----------------------------------------------------------------------------
- * Create a new publication
- */
-void Session::CreatePublicationWorker(uv_work_t* req)
-{
-  CreatePublicationRequest* request = (CreatePublicationRequest*)req->data;
-
-  TVA_PUBLISHER_HANDLE publisher = TVA_INVALID_HANDLE;
-  TVA_STATUS rc = tvaCreatePublication(request->session->GetHandle(), request->topic, 0, false, false, &publisher);
-  if (rc == TVA_OK)
-  {
-    Publication* publication = new Publication(request->session);
-    publication->SetHandle(publisher);
-
-  /* Tervela API versions 5.1.5 and above support retrieving the QoS of a publication
-     after it was created.  This allows the node library to use the same set of functions
-     for publishing to both BE/GC and GD topics, unlink the C/Java/C# APIs which have
-     separate functions for GD.  
-
-     For library versions prior to 5.1.5, the node library will need to be hardcoded
-     to support only GC topics or only GD topics for publication. 
-     Change the explicit SetQos below to TVA_QOS_GUARANTEED_DELIVERY for GD publish.
-     Note that in either case you can't publish GD to a GC topic and vice versa. */
-
-#ifdef TVA_PUBINFO_QOS
-    int qos;
-    if (tvaPubInfoGet(publisher, TVA_PUBINFO_QOS, &qos, sizeof(qos)) == TVA_OK)
-    {
-      publication->SetQos(qos);
-    }
-#else
-    /* NOTE: this will fail if the underlying topic is GD, since you must publish
-       GD to a topic that could have GD subscribers.  You can set it to
-       TVA_QOS_GUARANTEED_DELIVERY instead, but then you will only be able to
-       publish to GD topics.  */
-    publication->SetQos(TVA_QOS_GUARANTEED_CONNECTED);
-#endif
-
-    request->publication = publication;
-  }
-
-  request->result = rc;
-}
-
-/*-----------------------------------------------------------------------------
- * Create publication complete
- */
-void Session::CreatePublicationWorkerComplete(uv_work_t* req)
-{
-  HandleScope scope;
-
-  CreatePublicationRequest* request = (CreatePublicationRequest*)req->data;
-  delete req;
-
-  Handle<Value> argv[2];
-  if (request->result == TVA_OK)
-  {
-    argv[0] = Undefined();
-    argv[1] = Local<Value>::New(Publication::NewInstance(request->publication));
-  }
-  else
-  {
-    argv[0] = String::New(tvaErrToStr(request->result));
-    argv[1] = Undefined();
-  }
-
-  TryCatch tryCatch;
-
-  request->complete->Call(Context::GetCurrent()->Global(), 2, argv);
-  request->complete.Dispose();
-  if (tryCatch.HasCaught())
-  {
-    node::FatalException(tryCatch);
-  }
-
-  free(request->topic);
-  delete request;
 }
 
 /*-----------------------------------------------------------------------------
