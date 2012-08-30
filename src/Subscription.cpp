@@ -158,6 +158,10 @@ void Subscription::SetEventHandler(char* evt, Local<Function> handler)
   {
     _messageHandler.push_back(Persistent<Function>::New(handler));
   }
+  else
+  {
+    THROW_INVALID_EVENT_LISTENER("subscription", evt);
+  }
 }
 
 

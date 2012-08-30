@@ -68,3 +68,10 @@
     v8::ThrowException(v8::Exception::TypeError(String::New(msg)));             \
     return scope.Close(v8::Undefined());                                        \
   }
+
+#define THROW_INVALID_EVENT_LISTENER(obj, evt)                                  \
+  do {                                                                          \
+    char msg[80];                                                               \
+    snprintf(msg, sizeof(msg), "Invalid %s event '%s'", obj, evt);              \
+    v8::ThrowException(v8::Exception::TypeError(String::New(msg)));             \
+  } while (0);

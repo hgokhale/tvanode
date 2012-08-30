@@ -1,22 +1,28 @@
 /**
-* sub.js
-*
-* Subscriber test application
-*
-* Usage:
-*   node sub.js --tmx=tmx[:tmx] [options]
-*      --user=username                  (optional, default: tervela)
-*      --pass=password                  (optional, default: tva123ma1)
-*      --tmx=tmx[:tmx]                  (required)
-*      --gdname=gd_client_name          (required for GD)
-*      --topic=topic[:topic]            (optional, default: TEST.BULK.*)
-*      --tcount=wc_topic_count          (optional, default: 1)
-*      --tstart=wc_topic_start          (optional, default: 0)
-*      --duration=test_duration_s       (optional, default: 30)
-*      --qos=( "BE" | "GC" | "GD" )     (optional, default: "BE")
-*      --subname=subscription_name      (required for GD)
-*      --ackmode=( "auto" | "manual" )  (optional for GD, default: "auto")
-*/
+ * sub.js
+ *
+ * This application creates one or more subscriptions and receives messages for the configured duration.
+ *
+ * Usage:
+ *   node sub.js --tmx=tmx[:tmx] [options]
+ *      --user=username                  (optional, default: tervela)
+ *      --pass=password                  (optional, default: tva123ma1)
+ *      --tmx=tmx[:tmx]                  (required)
+ *      --gdname=gd_client_name          (required for GD)
+ *      --topic=topic[:topic]            (optional, default: TEST.BULK.*)
+ *      --tcount=wc_topic_count          (optional, default: 1)
+ *      --tstart=wc_topic_start          (optional, default: 0)
+ *      --duration=test_duration_s       (optional, default: 30)
+ *      --qos=( "BE" | "GC" | "GD" )     (optional, default: "BE")
+ *      --subname=subscription_name      (required for GD)
+ *      --ackmode=( "auto" | "manual" )  (optional for GD, default: "auto")
+ *
+ * If a given topic is a wildcard topic the wildcard is expanded into "tcount" discrete topics, using the pattern:
+ *   T[(tstart)...(tstart+tcount)]
+ * So if the topic is TEST.BULK.*, and tstart=10 and tcount=20, the application will subscribe to
+ *   TEST.BULK.T10 through TEST.BULK.T29
+ * If a tcount of 0 is specified the application will subscribe on the wildcard topic directly.
+ */
 
 // Set NODE_PATH environment variable to include location of tervela.node file
 var tervela = require("tervela");
@@ -129,6 +135,7 @@ else {
     console.log("");
 
     // Login to the TMX/TMXs
+    console.log("Connecting to %s...", (_secondaryTmx) ? "TMXs" : "TMX");
     tervela.connect({
         username: _username,
         password: _password,
@@ -137,17 +144,24 @@ else {
         name: _gdName
     }, function (err, session) {
         if (err) {
-            console.log("Login failed: " + err);
+            console.log("Connect failed: " + err);
             return;
         }
 
+        // Set up session event listeners
         session
-            .on('connect-info', function (activeTmx, standbyTmx) {
+            .on('connection-info', function (activeTmx, standbyTmx) {
                 var info = "* Session connected to active TMX " + activeTmx;
                 if (standbyTmx) {
                     info += ", standby TMX " + standbyTmx;
                 }
                 console.log(info);
+            })
+            .on('connection-lost', function () {
+                console.log("* Lost session connection, all operations affected");
+            })
+            .on('connection-restored', function () {
+                console.log("* Session connection restored, all operations will continue");
             })
             .on('gds-lost', function () {
                 console.log("* Lost communications with the GDS, GD operations affected");
@@ -156,7 +170,7 @@ else {
                 console.log("* Communications with the GDS have been restored, GD operations will continue");
             });
 
-        console.log("Login complete");
+        console.log("Connected");
 
         // Determine total number of subscriptions
         var totalSubCount = 0;
@@ -176,7 +190,8 @@ else {
             if ((val.indexOf("*") != -1) && (_wcTopicCount > 0)) {
                 // Wildcard, expand to multiple subscriptions
                 for (var i = 0; i < _wcTopicCount; i++) {
-                    var topic = val.replace("*", "T" + (i + _wcTopicStart));
+                    var idx = i + parseInt(_wcTopicStart);
+                    var topic = val.replace("*", "T" + idx);
                     startSubscription(session, topic, subscriptions, topics, totalSubCount);
                 }
             }

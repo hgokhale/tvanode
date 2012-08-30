@@ -169,7 +169,7 @@ void Session::SetEventHandler(char* evt, Local<Function> handler)
   {
     _terminateHandler.push_back(Persistent<Function>::New(handler));
   }
-  else if (tva_str_casecmp(evt, "connect-info") == 0)
+  else if (tva_str_casecmp(evt, "connection-info") == 0)
   {
     _connInfoHandler.push_back(Persistent<Function>::New(handler));
   }
@@ -184,6 +184,10 @@ void Session::SetEventHandler(char* evt, Local<Function> handler)
   else if (tva_str_casecmp(evt, "notify") == 0)
   {
     _defaultHandler.push_back(Persistent<Function>::New(handler));
+  }
+  else
+  {
+    THROW_INVALID_EVENT_LISTENER("session", evt);
   }
 }
 
@@ -285,8 +289,6 @@ void Session::TerminateComplete()
   {
     (*subIterator)->MarkInUse(false);
   }
-
-  MarkInUse(false);
 }
 
 /*-----------------------------------------------------------------------------

@@ -83,10 +83,6 @@ The `Session` object supports a number of events that the application can assign
         .on('close', function () {
             // Completely disconneted from the fabric
             console.log("* Connection Closed");
-        })
-        .on('notify', function (code, msg) {
-            // Misc. session notification event
-            console.log("* Notification (%d): %s", code, msg);
         });
 
 Once logged in, the `Session` object is used to create publications and subscriptions.
@@ -208,12 +204,12 @@ See the `test` directory for samples.
     session.on(event, listener);
     
     Events / Listeners:
+      'connection-info'      - Initial connection info                 - function (activeTmx, standbyTmx) { }
       'connection-lost'      - Connection lost (will auto-reconnect)   - function () { }
       'connection-restored'  - Reconnected after connection lost       - function () { }
-      'close'                - Session closed                          - function () { }
-      'connect-info'         - Initial connection info                 - function (activeTmx, standbyTmx) { }
       'gds-lost'             - GDS communications lost                 - function () { }
       'gds-restored'         - GDS communications restored             - function () { }
+      'close'                - Session closed                          - function () { }
       'notify'               - Misc. session notification event        - function (code, msg) { }
 
 #### Session.createPublication - Create a new publication object, get ready to send messages

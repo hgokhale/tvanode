@@ -130,6 +130,10 @@ void Replay::SetEventHandler(char* evt, Local<Function> handler)
   {
     _errorHandler.push_back(Persistent<Function>::New(handler));
   }
+  else
+  {
+    THROW_INVALID_EVENT_LISTENER("replay", evt);
+  }
 }
 
 

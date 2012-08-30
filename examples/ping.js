@@ -1,7 +1,8 @@
 /**
  * ping.js
  *
- * Ping latency test application
+ * This application send and receives messages on a PING topic, timing the total
+ * round-trip latency for each message.
  *
  * Usage:
  *   node ping.js --tmx=tmx[:tmx] [options]
@@ -99,6 +100,7 @@ else {
     var startTime, endTime;
 
     // Login to the TMX/TMXs
+    console.log("Connecting to %s...", (_secondaryTmx) ? "TMXs" : "TMX");
     tervela.connect({
         username: username,
         password: password,
@@ -106,15 +108,27 @@ else {
         secondaryTmx: secondaryTmx
     }, function (err, session) {
         if (err) {
-            console.log("Session connect failed: " + err);
+            console.log("Connect failed: " + err);
             return;
         }
 
-        session.on('notify', function (code, msg) {
-            console.log("* Session notification %d : %s", code, msg);
-        });
+        // Set up session event listeners
+        session
+            .on('connection-info', function (activeTmx, standbyTmx) {
+                var info = "* Session connected to active TMX " + activeTmx;
+                if (standbyTmx) {
+                    info += ", standby TMX " + standbyTmx;
+                }
+                console.log(info);
+            })
+            .on('connection-lost', function () {
+                console.log("* Lost session connection, all operations affected");
+            })
+            .on('connection-restored', function () {
+                console.log("* Session connection restored, all operations will continue");
+            });
 
-        console.log("Session connected");
+        console.log("Connected");
 
         var subscription, publication;
 

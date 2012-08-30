@@ -1,21 +1,26 @@
 /**
-* pub.js
-*
-* Publisher test application
-*
-* Usage:
-*   node pub.js --tmx=tmx[:tmx] [options]
-*      --user=username                  (optional, default: tervela)
-*      --pass=password                  (optional, default: tva123ma1)
-*      --tmx=tmx[:tmx]                  (required)
-*      --gdname=gd_client_name          (required for GD)
-*      --topic=topic[:topic]            (optional, default: TEST.BULK.*)
-*      --tcount=wc_topic_count          (optional, default: 1)
-*      --tstart=wc_topic_start          (optional, default: 0)
-*      --burst=msg_burst_count          (optional, default: 10)
-*      --delay=inter_burst_ms           (optional, default: 10)
-*      --duration=test_duration_s       (optional, default: 30)
-*/
+ * pub.js
+ *
+ * This application creates one or more publications and sends messages for the configured duration.
+ *
+ * Usage:
+ *   node pub.js --tmx=tmx[:tmx] [options]
+ *      --user=username                  (optional, default: tervela)
+ *      --pass=password                  (optional, default: tva123ma1)
+ *      --tmx=tmx[:tmx]                  (required)
+ *      --gdname=gd_client_name          (required for GD)
+ *      --topic=topic[:topic]            (optional, default: TEST.BULK.*)
+ *      --tcount=wc_topic_count          (optional, default: 1)
+ *      --tstart=wc_topic_start          (optional, default: 0)
+ *      --burst=msg_burst_count          (optional, default: 10)
+ *      --delay=inter_burst_ms           (optional, default: 10)
+ *      --duration=test_duration_s       (optional, default: 30)
+ *
+ * If a given topic is a wildcard topic the wildcard is expanded into "tcount" discrete topics, using the pattern:
+ *   T[(tstart)...(tstart+tcount)]
+ * So if the topic is TEST.BULK.*, and tstart=10 and tcount=20, the application will publish on
+ *   TEST.BULK.T10 through TEST.BULK.T29
+ */
 
 // Set NODE_PATH environment variable to include location of tervela.node file
 var tervela = require("tervela");
@@ -117,6 +122,7 @@ else {
     console.log("");
 
     // Login to the TMX/TMXs
+    console.log("Connecting to %s...", (_secondaryTmx) ? "TMXs" : "TMX");
     tervela.connect({
         username: _username,
         password: _password,
@@ -125,17 +131,24 @@ else {
         name: _gdName
     }, function (err, session) {
         if (err) {
-            console.log("Login failed: " + err);
+            console.log("Connect failed: " + err);
             return;
         }
 
+        // Set up session event listeners
         session
-            .on('connect-info', function (activeTmx, standbyTmx) {
+            .on('connection-info', function (activeTmx, standbyTmx) {
                 var info = "* Session connected to active TMX " + activeTmx;
                 if (standbyTmx) {
                     info += ", standby TMX " + standbyTmx;
                 }
                 console.log(info);
+            })
+            .on('connection-lost', function () {
+                console.log("* Lost session connection, all operations affected");
+            })
+            .on('connection-restored', function () {
+                console.log("* Session connection restored, all operations will continue");
             })
             .on('gds-lost', function () {
                 console.log("* Lost communications with the GDS, GD operations affected");
@@ -144,7 +157,7 @@ else {
                 console.log("* Communications with the GDS have been restored, GD operations will continue");
             });
 
-        console.log("Login complete");
+        console.log("Connected");
 
         var publications = new Array();
         _topicList.forEach(function (topic, index, array) {
@@ -215,7 +228,8 @@ function messageThread(pub, baseTopic) {
         var topic = baseTopic;
         var topicLeaf = 0;
         for (var i = 0; i < _burst; i++) {
-            topic = baseTopic.replace("*", "T" + (topicLeaf + _wcTopicStart));
+            var idx = topicLeaf + parseInt(_wcTopicStart);
+            topic = baseTopic.replace("*", "T" + idx);
             if (++topicLeaf >= _wcTopicCount) {
                 topicLeaf = 0;
             }
