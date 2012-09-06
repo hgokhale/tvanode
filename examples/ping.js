@@ -30,6 +30,7 @@ var password = "tva123ma1";
 var topic = "PING";
 var primaryTmx = "";
 var secondaryTmx = "";
+var name = "";
 var count = 100;
 var delay = 10;
 var verbose = false;
@@ -54,6 +55,9 @@ args.forEach(function (val, index, array) {
         }
         else if (keyval[0] == "--delay") {
             delay = keyval[1];
+        }
+        else if (keyval[0] == "--name") {
+            name = keyval[1];
         }
         else if (keyval[0] == "--tmx") {
             var ps = keyval[1].split(":");
@@ -100,12 +104,13 @@ else {
     var startTime, endTime;
 
     // Login to the TMX/TMXs
-    console.log("Connecting to %s...", (_secondaryTmx) ? "TMXs" : "TMX");
+    console.log("Connecting to %s...", (secondaryTmx) ? "TMXs" : "TMX");
     tervela.connect({
         username: username,
         password: password,
         primaryTmx: primaryTmx,
-        secondaryTmx: secondaryTmx
+        secondaryTmx: secondaryTmx,
+        name: name
     }, function (err, session) {
         if (err) {
             console.log("Connect failed: " + err);

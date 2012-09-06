@@ -1,3 +1,7 @@
+/**
+ * Copyright (c) 2012 Tervela.  All rights reserved.
+ */
+
 #include <stdlib.h>
 #include "v8-convert.hpp"
 #include "DataTypes.h"

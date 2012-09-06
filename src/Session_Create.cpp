@@ -1,3 +1,7 @@
+/**
+ * Copyright (c) 2012 Tervela.  All rights reserved.
+ */
+
 #include <vector>
 #include <string>
 #include <stdlib.h>

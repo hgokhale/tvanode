@@ -1,3 +1,7 @@
+/**
+ * Copyright (c) 2012 Tervela.  All rights reserved.
+ */
+
 #pragma once
 
 #include <vector>

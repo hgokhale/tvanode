@@ -1,3 +1,6 @@
+/**
+ * Copyright (c) 2012 Tervela.  All rights reserved.
+ */
 
 #include "compat.h"
 
