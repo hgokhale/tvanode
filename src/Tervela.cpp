@@ -205,15 +205,37 @@ bool ConnectParseOptions(Local<Object> options, ConnectRequest* request)
       String::AsciiValue val(optionValue->ToString());
       request->password = strdup(*val);
     }
-    else if (tva_str_casecmp(optionName, "primaryTmx") == 0)
+    else if (tva_str_casecmp(optionName, "tmx") == 0)
     {
-      String::AsciiValue val(optionValue->ToString());
-      request->primaryTmx = strdup(*val);
-    }
-    else if (tva_str_casecmp(optionName, "secondaryTmx") == 0)
-    {
-      String::AsciiValue val(optionValue->ToString());
-      request->secondaryTmx = strdup(*val);
+      if (optionValue->IsString())
+      {
+        String::AsciiValue val(optionValue->ToString());
+        request->primaryTmx = strdup(*val);
+      }
+      else if (optionValue->IsArray())
+      {
+        Handle<Array> tmxs = Handle<Array>::Cast(optionValue);
+        char** p_tmx = &request->primaryTmx;
+        Local<Value> element;
+        
+        element = tmxs->Get(0);
+        if (!element->IsUndefined())
+        {
+          String::AsciiValue tmx(element->ToString());
+          *p_tmx = strdup(*tmx);
+          p_tmx = &request->secondaryTmx;
+        }
+
+        if (tmxs->Length() > 1)
+        {
+          element = tmxs->Get(1);
+          if (!element->IsUndefined())
+          {
+            String::AsciiValue tmx(element->ToString());
+            *p_tmx = strdup(*tmx);
+          }
+        }
+      }
     }
     else if (tva_str_casecmp(optionName, "name") == 0)
     {

@@ -92,8 +92,7 @@ else {
     var connectOptions = {
         username: _username,
         password: _password,
-        primaryTmx: _primaryTmx,
-        secondaryTmx: _secondaryTmx,
+        tmx: [ _primaryTmx, _secondaryTmx ],
         name: _gdName
     };
 

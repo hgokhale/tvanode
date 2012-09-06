@@ -108,8 +108,7 @@ else {
     tervela.connect({
         username: username,
         password: password,
-        primaryTmx: primaryTmx,
-        secondaryTmx: secondaryTmx,
+        tmx: [ primaryTmx, secondaryTmx ],
         name: name
     }, function (err, session) {
         if (err) {

@@ -55,8 +55,7 @@ Next, connect to the TMX:
     var connectOptions = {
         username: API-username,
         password: API-password,
-        primaryTmx: primary-tmx,
-        secondaryTmx: secondary-tmx,
+        tmx: [ primary-tmx, secondary-tmx ],
         timeout: 30,
     };
     tervela.connect(connectOptions, function (err, session) {
@@ -71,7 +70,7 @@ Next, connect to the TMX:
 
 The `Session` object supports a number of events that the application can assign listeners to.
 
-    session.
+    session
         .on('connection-lost', function () {
             // Temporarily disconnected from the fabric
             console.log("* Connection Lost");
@@ -108,27 +107,25 @@ Once logged in, the `Session` object is used to create publications and subscrip
         }
     });
     
-    // Unlike publications, subscriptions are created empty and must be started
-    var subscription = session.createSubscription();
-    subscription
-        .start(topic)
-        .on('start', function (err) {
-            if (err) {
-                console.log("Error starting subscription: " + err);
-            }
-        })
-        .on('message', function (msg) {
-            // Once a subscription is started messages can be received
-            console.log("Message received!");
-            console.log("- Topic: " + msg.topic);
-            console.log("- GenerationTime: " + msg.generationTime);
-            console.log("- ReceiveTime: " + msg.receiveTime);
-            
-            for (var field in msg.fields) {
-                var fieldContents = msg.fields[field];
-                console.log("--- " + field + " : " + fieldContents);
-            }
-        })
+    // Subscriptions are created similarly
+    session.createSubscription(topic, function (err, subscription) {
+        if (err) {
+            console.log("Error starting subscription: " + err);
+        }
+        else {
+            subscription.on('message', function (msg) {
+                // Once a subscription is started messages can be received
+                console.log("Message received!");
+                console.log("- Topic: " + msg.topic);
+                console.log("- GenerationTime: " + msg.generationTime);
+                console.log("- ReceiveTime: " + msg.receiveTime);
+                
+                for (var field in msg.fields) {
+                    var fieldContents = msg.fields[field];
+                    console.log("--- " + field + " : " + fieldContents);
+                }
+            });
+        }
     });
 
 When publications and subscriptions are no longer needed, they should be stopped:
@@ -148,7 +145,7 @@ When publications and subscriptions are no longer needed, they should be stopped
 When a session is no longer needed, it should be terminated by calling logout:
 
     session.logout(function (err) { 
-        if (err != undefined) {
+        if (err) {
             console.log("Error in logout: " + err);
         }
     };
@@ -170,8 +167,7 @@ See the `test` directory for samples.
     connect({
         username      : [API username],                         (string, required)
         password      : [API password],                         (string, required)
-        primaryTmx    : [TMX name or address],                  (string, required)
-        secondaryTmx  : [TMX name or address],                  (string, optional (default: [empty]))
+        tmx           : [TMX name(s) or address(es)],           (string or array of strings, required)
         timeout       : [login timeout in seconds],             (integer, optional (default: 30))
         name          : [client name for GD operations],        (string, only required when using GD)
         gdMaxOut      : [GD publisher max outstanding]          (integer, only required when using GD (default: 1000))
@@ -180,7 +176,7 @@ See the `test` directory for samples.
         // If `err` is set an error occurred and the session was not created successfully
     });
 
-* `secondaryTmx` is used when logging into a TMX Fault-Tolerant pair
+* `tmx` can be either a string or an array of strings.  If an array of strings is specified, the first element will be used as the primary TMX and the second element will be used as the secondary TMX.
 * A `timeout` of 0 means login will never timeout, and will internally retry until successful
 
 #### connectSync - Create a session and login to the Tervela fabric (synchronous version)
@@ -188,13 +184,14 @@ See the `test` directory for samples.
     var session = tervela.connectSync({
         username      : [API username],                         (string, required)
         password      : [API password],                         (string, required)
-        primaryTmx    : [TMX name or address],                  (string, required)
-        secondaryTmx  : [TMX name or address],                  (string, optional (default: [empty]))
+        tmx           : [TMX name(s) or address(es)],           (string or array of strings, required)
         timeout       : [login timeout in seconds],             (integer, optional (default: 30))
         name          : [client name for GD operations],        (string, only required when using GD)
         gdMaxOut      : [GD publisher max outstanding]          (integer, only required when using GD (default: 1000))
     });
 
+* `tmx` can be either a string or an array of strings.  If an array of strings is specified, the first element will be used as the primary TMX and the second element will be used as the secondary TMX.
+* A `timeout` of 0 means login will never timeout, and will internally retry until successful
 * On success connectSync returns a `Session` object.  On failure connectSync returns a `string`, the text being the reason for failure.
 
 ### Session
@@ -256,7 +253,7 @@ See the `test` directory for samples.
 
 #### Session.createReplay - Create a new replay object, get ready to receive messages
 
-    session.createReplay(topic {
+    session.createReplay(topic, {
         startTime     : [Replay start time]                     (Date, required)
         endTime       : [Replay end time]                       (Date, required)
     }, function (err, replay) {
@@ -269,7 +266,7 @@ See the `test` directory for samples.
 
 #### Session.createReplaySync - Create a new replay object, get ready to receive messages (synchronous version)
 
-    var replay = session.createReplaySync(topic {
+    var replay = session.createReplaySync(topic, {
         startTime     : [Replay start time]                     (Date, required)
         endTime       : [Replay end time]                       (Date, required)
     });
