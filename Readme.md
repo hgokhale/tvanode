@@ -142,11 +142,11 @@ When publications and subscriptions are no longer needed, they should be stopped
         }
     });
 
-When a session is no longer needed, it should be terminated by calling logout:
+When a session is no longer needed, it should be terminated by calling close:
 
-    session.logout(function (err) { 
+    session.close(function (err) { 
         if (err) {
-            console.log("Error in logout: " + err);
+            console.log("Error in close: " + err);
         }
     };
 
@@ -278,7 +278,7 @@ See the `test` directory for samples.
 #### Session.close - Logout and disconnect from the Tervela fabric
 
     session.close(function (err) {
-        // Session logout complete
+        // Session close complete
         // If `err` is set an error occurred
     });
 
