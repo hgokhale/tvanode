@@ -79,3 +79,4 @@
     snprintf(msg, sizeof(msg), "Invalid %s event '%s'", obj, evt);              \
     v8::ThrowException(v8::Exception::TypeError(String::New(msg)));             \
   } while (0);
+

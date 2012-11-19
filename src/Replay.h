@@ -10,9 +10,10 @@
 #include "tvaClientAPIInterface.h"
 #include "tvaPEAPI.h"
 #include "DataTypes.h"
+#include "EventEmitter.h"
 #include "Session.h"
 
-class Replay: node::ObjectWrap
+class Replay: node::ObjectWrap, EventEmitter
 {
 public:
   /*-----------------------------------------------------------------------------
@@ -24,6 +25,9 @@ public:
    *   'message'              - Message received                        - function (message) { }
    *   'finish'               - Replay finished, all messages received  - function () { }
    *   'error'                - Replay error occurred                   - function (err) { }
+   *   'pause'                - Replay paused                           - function (err) { }
+   *   'resume'               - Replay resumed                          - function (err) { }
+   *   'stop'                 - Replay stopped                          - function (err) { }
    *
    * message = {
    *     topic,                 (string : message topic)
@@ -37,27 +41,21 @@ public:
   /*-----------------------------------------------------------------------------
    * Pause the replay
    *
-   * replay.pause(function (err) {
-   *     // Replay pause complete
-   * });
+   * replay.pause([callback]);
    */
   static v8::Handle<v8::Value> Pause(const v8::Arguments& args);
 
   /*-----------------------------------------------------------------------------
    * Resume the replay
    *
-   * replay.resume(function (err) {
-   *     // Replay resume complete
-   * });
+   * replay.resume([callback]);
    */
   static v8::Handle<v8::Value> Resume(const v8::Arguments& args);
 
   /*-----------------------------------------------------------------------------
    * Stop the replay
    *
-   * replay.stop(function (err) {
-   *     // Replay stop complete
-   * });
+   * replay.stop([callback]);
    */
   static v8::Handle<v8::Value> Stop(const v8::Arguments& args);
 
@@ -73,8 +71,6 @@ public:
   static void ReplayNotificationEvent(TVA_REPLAY_HANDLE replayHndl, void* context,
                                       TVA_STATUS replayStatus, TVA_BOOLEAN replayHndlValid);
 
-  void SetEventHandler(char* evt, v8::Local<v8::Function> handler);
-
   inline Session* GetSession() { return _session; };
   inline uv_async_t* GetMessageAsyncObj() { return &_msgAsync; }
   inline uv_async_t* GetNotifyAsyncObj() { return &_notifyAsync; }
@@ -82,12 +78,18 @@ public:
   inline void SetHandle(TVA_REPLAY_HANDLE handle) { _handle = handle; }
   inline TVA_REPLAY_HANDLE GetHandle() { return _handle; }
 
-  inline void PostMessageEvent(MessageEvent& messageEvent)
+  inline bool PostMessageEvent(MessageEvent& messageEvent)
   {
+    bool posted = false;
     uv_mutex_lock(&_messageEventLock);
-    _messageEventQueue.push(messageEvent);
+    if (_isInUse)
+    {
+      _messageEventQueue.push(messageEvent);
+      uv_async_send(GetMessageAsyncObj());
+      posted = true;
+    }
     uv_mutex_unlock(&_messageEventLock);
-    uv_async_send(GetMessageAsyncObj());
+    return posted;
   }
 
   inline bool GetNextMessageEvent(MessageEvent& messageEvent)
@@ -108,10 +110,13 @@ public:
 
   inline void PostNotificationEvent(TVA_STATUS rc)
   {
-    uv_mutex_lock(&_notificationEventLock);
-    _notificationEventQueue.push(rc);
-    uv_mutex_unlock(&_notificationEventLock);
-    uv_async_send(GetNotifyAsyncObj());
+    if (_isInUse)
+    {
+      uv_mutex_lock(&_notificationEventLock);
+      _notificationEventQueue.push(rc);
+      uv_mutex_unlock(&_notificationEventLock);
+      uv_async_send(GetNotifyAsyncObj());
+    }
   }
 
   inline bool GetNextNotificationEvent(TVA_STATUS& rc)
@@ -133,7 +138,9 @@ public:
   inline bool IsInUse() { return _isInUse; }
   inline void MarkInUse(bool inUse)
   {
+    uv_mutex_lock(&_messageEventLock);
     _isInUse = inUse;
+
     if (inUse)
     {
       uv_async_init(uv_default_loop(), GetMessageAsyncObj(), Replay::MessageAsyncEvent);
@@ -149,6 +156,8 @@ public:
       Unref();
       MakeWeak();
     }
+
+    uv_mutex_unlock(&_messageEventLock);
   }
 
   void InvokeJsFinishEvent(v8::Local<v8::Object> context, TVA_STATUS rc);
@@ -171,9 +180,6 @@ private:
   TVA_REPLAY_HANDLE _handle;
   uv_async_t _msgAsync;
   uv_async_t _notifyAsync;
-  std::vector< v8::Persistent<v8::Function> > _messageHandler;
-  std::vector< v8::Persistent<v8::Function> > _finishHandler;
-  std::vector< v8::Persistent<v8::Function> > _errorHandler;
   std::queue<MessageEvent> _messageEventQueue;
   uv_mutex_t _messageEventLock;
   std::queue<TVA_STATUS> _notificationEventQueue;

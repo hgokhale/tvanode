@@ -14,6 +14,7 @@
 #include "Publication.h"
 #include "Subscription.h"
 #include "Replay.h"
+#include "Logger.h"
 
 using namespace v8;
 
@@ -23,7 +24,8 @@ using namespace v8;
  */
 Handle<Value> Connect(const Arguments& args);
 Handle<Value> ConnectSync(const Arguments& args);
-
+Handle<Value> GetLogger(const Arguments& args);
+void FatalErrorHandler(const char* location, const char* message);
 
 /*-----------------------------------------------------------------------------
  * Initialize the module
@@ -32,10 +34,36 @@ void Init(Handle<Object> target)
 {
   target->Set(String::NewSymbol("connect"), FunctionTemplate::New(Connect)->GetFunction());
   target->Set(String::NewSymbol("connectSync"), FunctionTemplate::New(ConnectSync)->GetFunction());
+  target->Set(String::NewSymbol("getLogger"), FunctionTemplate::New(GetLogger)->GetFunction());
+
+  V8::SetFatalErrorHandler(FatalErrorHandler);
+}
+
+/*-----------------------------------------------------------------------------
+ * Handle fatal errors
+ */
+void FatalErrorHandler(const char* location, const char* message)
+{
+  tvaLogFatal("Error @ %s: %s", location, message);
 }
 
 
 /*****     Connect     *****/
+
+enum ConfigType
+{
+  ConfigTypeBool,
+  ConfigTypeInt,
+  ConfigTypeString,
+  ConfigTypeCustom
+};
+
+struct ConnectConfigParam
+{
+  char jsName[64];
+  TVA_UINT32 tvaParam;
+  ConfigType configType;
+};
 
 struct ConnectRequest
 {
@@ -66,6 +94,31 @@ struct ConnectRequest
 bool ConnectParseOptions(Local<Object> options, ConnectRequest* request);
 void ConnectWorker(uv_work_t* req);
 void ConnectWorkerComplete(uv_work_t* req);
+
+static ConnectConfigParam g_connectConfig[] = 
+{
+  { "pubRate",              TVA_APPCFG_PUB_RATE,              ConfigTypeInt    },
+  { "pubBandwidthLimit",    TVA_APPCFG_PUB_BW_LIMIT,          ConfigTypeInt    },
+  { "subRate",              TVA_APPCFG_PUB_RATE,              ConfigTypeInt    },
+  { "dataTransportType",    TVA_APPCFG_DATA_TRANSPORT_TYPE,   ConfigTypeCustom },
+  { "subAudit",             TVA_APPCFG_SUB_AUDIT,             ConfigTypeBool   },
+  { "pubAudit",             TVA_APPCFG_PUB_AUDIT,             ConfigTypeBool   },
+  { "configFilename",       TVA_APPCFG_CONFIG_FILE,           ConfigTypeString },
+  { "maxReconnectCount",    TVA_APPCFG_RECONNECT_MAX_COUNT,   ConfigTypeInt    },
+#ifdef TVA_APPCFG_MAX_PUBS
+  { "maxPublications",      TVA_APPCFG_MAX_PUBS,              ConfigTypeInt    },
+#endif
+#ifdef TVA_APPCFG_MAX_SUBS
+  { "maxSubscriptions",     TVA_APPCFG_MAX_SUBS,              ConfigTypeInt    },
+#endif
+  { "allowTerminationName", TVA_APPCFG_ALLOW_TERM_NAME,       ConfigTypeString },
+  { "logFilename",          TVA_APPCFG_LOCAL_LOGFILE,         ConfigTypeString },
+  { "logTag",               TVA_APPCFG_LOCAL_LOGTAG,          ConfigTypeString },
+  { "favorTmxOrder",        TVA_APPCFG_FAVOR_TMX_ORDER,       ConfigTypeBool   },
+  { "gcChannelOnly",        TVA_APPCFG_GC_CHANNEL_ONLY,       ConfigTypeBool   }
+};
+
+#define NUM_PARAMS  (sizeof(g_connectConfig) / sizeof(ConnectConfigParam))
 
 /*-----------------------------------------------------------------------------
  * Create a new session and login to the Tervela fabric
@@ -250,6 +303,101 @@ bool ConnectParseOptions(Local<Object> options, ConnectRequest* request)
     {
       request->gdMaxOut = optionValue->Int32Value();
     }
+    else if (tva_str_casecmp(optionName, "config") == 0)
+    {
+      if (optionValue->IsObject())
+      {
+        Local<Object> config = Local<Object>::Cast(optionValue);
+        std::vector<std::string> configNames = cvv8::CastFromJS<std::vector<std::string> >(config->GetPropertyNames());
+        for (size_t j = 0; j < configNames.size(); j++)
+        {
+          char* configName = (char*)(configNames[j].c_str());
+          Local<Value> configValue = config->Get(String::NewSymbol(configName));
+
+          if (configValue->IsUndefined())
+          {
+            continue;
+          }
+
+          for (size_t c = 0; c < NUM_PARAMS; c++)
+          {
+            ConnectConfigParam* cp = &g_connectConfig[c];
+            if (tva_str_casecmp(configName, cp->jsName) == 0)
+            {
+              switch (cp->configType)
+              {
+              case ConfigTypeBool:
+                {
+                  bool bVal;
+                  if (configValue->IsBoolean())
+                  {
+                    bVal = configValue->BooleanValue();
+                  }
+                  else if (configValue->IsNumber())
+                  {
+                    bVal = (configValue->NumberValue() != 0);
+                  }
+                  else if (configValue->IsString())
+                  {
+                    String::AsciiValue bStrVal(config->ToString());
+                    bVal = (tva_str_casecmp(*bStrVal, "true") == 0);
+                  }
+
+                  tvaAppCfgSet(cp->tvaParam, &bVal, (TVA_INT32)sizeof(bVal));
+                }
+                break;
+
+              case ConfigTypeInt:
+                {
+                  int intVal = configValue->Int32Value();
+                  tvaAppCfgSet(cp->tvaParam, &intVal, (TVA_INT32)sizeof(intVal));
+                }
+                break;
+
+              case ConfigTypeString:
+                {
+                  String::AsciiValue strVal(configValue->ToString());
+                  tvaAppCfgSet(cp->tvaParam, *strVal, (TVA_INT32)strlen(*strVal));
+                }
+                break;
+
+              case ConfigTypeCustom:
+                if (cp->tvaParam == TVA_APPCFG_DATA_TRANSPORT_TYPE)
+                {
+                  TVA_DATATRANSPORT_TYPE transportType = TVA_DATATRANSPORT_UDP;
+
+                  if (configValue->IsString())
+                  {
+                    String::AsciiValue strVal(config->ToString());
+                    if (tva_str_casecmp(*strVal, "TCP"))
+                    {
+                      transportType = TVA_DATATRANSPORT_TCP;
+                    }
+                    else if (tva_str_casecmp(*strVal, "SSL"))
+                    {
+                      transportType = TVA_DATATRANSPORT_SSL;
+                    }
+                  }
+                  else if (configValue->IsNumber())
+                  {
+                    int numVal = (int)configValue->NumberValue();
+                    if ((numVal == TVA_DATATRANSPORT_TCP) || (numVal == TVA_DATATRANSPORT_SSL))
+                    {
+                      transportType = (TVA_DATATRANSPORT_TYPE)numVal;
+                    }
+                  }
+
+                  tvaAppCfgSet(cp->tvaParam, &transportType, (TVA_INT32)sizeof(transportType));
+                }
+                break;
+              }
+
+              break;
+            }
+          }
+        }
+      }
+    }
   }
 
   // Make sure required arguments were specified
@@ -367,6 +515,66 @@ void ConnectWorkerComplete(uv_work_t* req)
 }
 
 /*-----------------------------------------------------------------------------
+ * Get the current logger instance (will be created if it doesn't exist)
+ *
+ * var logger = tervela.getLogger({loggerOptions});
+ *
+ * loggerOptions = {
+ *     filename       : [log file name],                        (string, optional)
+ *     tagname        : [tag for log messages in file],         (string, optional (default: "TVA"[pid]))
+ * };
+ */
+Handle<Value> GetLogger(const Arguments& args)
+{
+  HandleScope scope;
+  static Local<Value> _logger;
+  static bool _isCreated = false;
+
+  if (!_isCreated)
+  {
+    // Ready arguments
+    char* filename = NULL;
+    char* tagname = NULL;
+
+    if (args.Length() >= 1)
+    {
+      PARAM_REQ_OBJECT(0, args);          // options
+      Local<Object> options = Local<Object>::Cast(args[0]);
+      std::vector<std::string> optionNames = cvv8::CastFromJS<std::vector<std::string> >(options->GetPropertyNames());
+      for (size_t i = 0; i < optionNames.size(); i++)
+      {
+        char* optionName = (char*)(optionNames[i].c_str());
+        Local<Value> optionValue = options->Get(String::NewSymbol(optionName));
+
+        if (optionValue->IsUndefined())
+        {
+          continue;
+        }
+
+        if (tva_str_casecmp(optionName, "filename") == 0)
+        {
+          String::AsciiValue val(optionValue->ToString());
+          filename = strdup(*val);
+        }
+        else if (tva_str_casecmp(optionName, "tagname") == 0)
+        {
+          String::AsciiValue val(optionValue->ToString());
+          tagname = strdup(*val);
+        }
+      }
+    }
+
+    _logger = Local<Value>::New(Logger::NewInstance(filename, tagname));
+    _isCreated = true;
+
+    if (filename) free(filename);
+    if (tagname) free(tagname);
+  }
+
+  return scope.Close(_logger);
+}
+
+/*-----------------------------------------------------------------------------
  * Node.js init entry point
  */
 extern "C" {
@@ -377,6 +585,7 @@ extern "C" {
     Publication::Init(target);
     Subscription::Init(target);
     Replay::Init(target);
+    Logger::Init(target);
   }
 
   NODE_MODULE(tervela, init);

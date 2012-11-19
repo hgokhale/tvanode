@@ -25,16 +25,16 @@ process.on('exit', function () {
     console.log("Done.");
 });
 
-var username = "tervela";
-var password = "tva123ma1";
-var topic = "PING";
-var primaryTmx = "";
-var secondaryTmx = "";
-var name = "";
-var count = 100;
-var delay = 10;
-var verbose = false;
-var exit = false;
+var username = "tervela",
+    password = "tva123ma1",
+    topic = "PING",
+    primaryTmx = "",
+    secondaryTmx = "",
+    name,
+    count = 100,
+    delay = 10,
+    verbose = false,
+    exit = false;
 
 // Process command line arguments
 var args = process.argv.splice(2);
@@ -89,6 +89,7 @@ else {
     console.log("Running with options:");
     console.log("  username     : " + username);
     console.log("  password     : " + password);
+    console.log("  name         : " + ((name) ? name : "[none]"));
     console.log("  primaryTmx   : " + primaryTmx);
     console.log("  secondaryTmx : " + secondaryTmx);
     console.log("  topic        : " + topic);
@@ -108,7 +109,7 @@ else {
     tervela.connect({
         username: username,
         password: password,
-        tmx: [ primaryTmx, secondaryTmx ],
+        tmx: [primaryTmx, secondaryTmx],
         name: name
     }, function (err, session) {
         if (err) {
@@ -130,6 +131,9 @@ else {
             })
             .on('connection-restored', function () {
                 console.log("* Session connection restored, all operations will continue");
+            })
+            .on('close', function () {
+                console.log("* Sesson closed");
             });
 
         console.log("Connected");
@@ -243,6 +247,7 @@ function printUsage() {
     console.log("Usage: node ping.js --tmx=tmx[:tmx] [options]");
     console.log("  --user=username                  (optional, default: tervela)");
     console.log("  --pass=password                  (optional, default: tva123ma1)");
+    console.log("  --name=gdClientName              (optional, default: [none]");
     console.log("  --topic=topic                    (optional, default: PING)");
     console.log("  --count=message_count            (optional, default: 100)");
     console.log("  --delay=inter_msg_gap_ms         (optional, default: 10)");

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <vector>
+#include <list>
 #include "tvaClientAPIInterface.h"
 
 /*-----------------------------------------------------------------------------
@@ -14,9 +14,18 @@ enum MessageFieldDataType
 {
   MessageFieldDataTypeNone,
   MessageFieldDataTypeBoolean,
+  MessageFieldDataTypeInt32,
   MessageFieldDataTypeNumber,
   MessageFieldDataTypeDate,
-  MessageFieldDataTypeString
+  MessageFieldDataTypeString,
+  MessageFieldDataTypeBooleanArray,
+  MessageFieldDataTypeInt16Array,
+  MessageFieldDataTypeInt32Array,
+  MessageFieldDataTypeInt64Array,
+  MessageFieldDataTypeFloatArray,
+  MessageFieldDataTypeDoubleArray,
+  MessageFieldDataTypeDateArray,
+  MessageFieldDataTypeStringArray,
 };
 
 /*-----------------------------------------------------------------------------
@@ -26,12 +35,15 @@ struct MessageFieldData
 {
   char name[64];
   MessageFieldDataType type;
+  int count;
   union
   {
     double numberValue;
+    int int32Value;
     char* stringValue;
     bool boolValue;
     TVA_DATE dateValue;
+    void* arrayValue;
   } value;
 };
 
@@ -41,9 +53,7 @@ struct MessageFieldData
 struct MessageEvent
 {
   TVA_MESSAGE* tvaMessage;
-  char topic[256];
-  TVA_UINT64 generationTime;
-  TVA_UINT64 receiveTime;
-  std::vector<MessageFieldData> fieldData;
+  std::list<MessageFieldData> fieldData;
+  int jmsMessageType;
   bool isLastMessage;
 };

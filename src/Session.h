@@ -13,6 +13,7 @@
 #include "tvaClientAPI.h"
 #include "tvaClientAPIInterface.h"
 #include "tvaGDAPI.h"
+#include "EventEmitter.h"
 #include "compat.h"
 
 class Publication;
@@ -21,6 +22,7 @@ class Subscription;
 struct GdAckWindowEntry
 {
   Publication* publisher;
+  v8::Persistent<v8::Object> origMessage;
   v8::Persistent<v8::Function> complete;
 };
 
@@ -34,7 +36,7 @@ struct SessionNotificaton
   } data;
 };
 
-class Session: node::ObjectWrap
+class Session: node::ObjectWrap, EventEmitter
 {
 public:
   /*-----------------------------------------------------------------------------
@@ -43,10 +45,10 @@ public:
    * session.on(event, listener);
    *
    * Events / Listeners:
+   *   'connection-info'         - Initial connection info                 - function (activeTmx, standbyTmx) { }
    *   'connection-lost'      - Connection lost (will auto-reconnect)   - function () { }
    *   'connection-restored'  - Reconnected after connection lost       - function () { }
    *   'close'                - Session closed                          - function () { }
-   *   'connect-info'         - Initial connection info                 - function (activeTmx, standbyTmx) { }
    *   'gds-lost'             - GDS communications lost                 - function () { }
    *   'gds-restored'         - GDS communications restored             - function () { }
    *   'notify'               - Misc. session notification event        - function (code, msg) { }
@@ -137,7 +139,8 @@ public:
   Session();
   ~Session();
 
-  TVA_STATUS SendGdMessage(Publication* publisher, TVA_PUBLISH_MESSAGE_DATA_HANDLE messageData, v8::Persistent<v8::Function> complete);
+  TVA_STATUS SendGdMessage(Publication* publisher, TVA_PUBLISH_MESSAGE_DATA_HANDLE messageData, 
+                           v8::Persistent<v8::Object> origMessage, v8::Persistent<v8::Function> complete);
   TVA_STATUS Terminate();
   void TerminateComplete();
 
@@ -171,14 +174,15 @@ public:
 
   v8::Local<v8::Object> CreateSubscriptionTable();
 
-  void SetEventHandler(char* evt, v8::Local<v8::Function> handler);
-
   inline void PostSessionEvent(SessionNotificaton& notificationEvent)
   {
-    uv_mutex_lock(&_sessionEventLock);
-    _sessionEventQueue.push(notificationEvent);
-    uv_mutex_unlock(&_sessionEventLock);
-    uv_async_send(GetAsyncObj());
+    if (_isInUse)
+    {
+      uv_mutex_lock(&_sessionEventLock);
+      _sessionEventQueue.push(notificationEvent);
+      uv_mutex_unlock(&_sessionEventLock);
+      uv_async_send(GetAsyncObj());
+    }
   }
 
   inline bool GetNextSessionEvent(SessionNotificaton& notificationEvent)
@@ -238,14 +242,6 @@ private:
 
   std::list<Subscription*> _subscriptionList;
 
-  std::vector< v8::Persistent<v8::Function> > _disconnectHandler;
-  std::vector< v8::Persistent<v8::Function> > _reconnectHandler;
-  std::vector< v8::Persistent<v8::Function> > _terminateHandler;
-  std::vector< v8::Persistent<v8::Function> > _connInfoHandler;
-  std::vector< v8::Persistent<v8::Function> > _gdsLostHandler;
-  std::vector< v8::Persistent<v8::Function> > _gdsRestoreHandler;
-  std::vector< v8::Persistent<v8::Function> > _defaultHandler;
-  
   uv_mutex_t _gdSendLock;
   GdAckWindowEntry* _gdAckWindow;
   int _gdAckWindowSize;

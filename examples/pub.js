@@ -169,7 +169,7 @@ var _pubCreateCount = 0;
 function createPublication(session, topic, publications, maxCount) {
     session.createPublication(topic, function (err, pub) {
         if (!err) {
-            console.log("Created publication on " + topic);
+            console.log("Created %s publication on %s", pub.qos, pub.topic);
             publications.push(pub);
         }
         else {
@@ -288,7 +288,7 @@ function shutdown(session, publications, timeDiff) {
     for (var i = 0; i < publications.length; i++) {
         var pub = publications[i];
         if (pub) {
-            console.log("Deleting publication on " + _topicList[i]);
+            console.log("Deleting publication on " + pub.topic);
             pub.stop(function (err) {
                 pubCount++;
                 if (pubCount == publications.length) {

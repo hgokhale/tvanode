@@ -7,9 +7,20 @@
 #include "DataTypes.h"
 #include "Helpers.h"
 #include "Session.h"
+#include "Subscription.h"
 #include "Replay.h"
 
 using namespace v8;
+
+enum ReplayEvent
+{
+  EVT_MESSAGE = 0,
+  EVT_PAUSE,
+  EVT_RESUME,
+  EVT_STOP,
+  EVT_FINISH,
+  EVT_ERROR
+};
 
 Persistent<Function> Replay::constructor;
 static bool _peInitialized = false;
@@ -66,6 +77,17 @@ Replay::Replay(Session* session)
   _isInUse = false;
   uv_mutex_init(&_messageEventLock);
   uv_mutex_init(&_notificationEventLock);
+
+  EventEmitterConfiguration events[] = 
+  {
+    { EVT_MESSAGE,  "message" },
+    { EVT_PAUSE,    "pause"   },
+    { EVT_RESUME,   "resume"  },
+    { EVT_STOP,     "stop"    },
+    { EVT_FINISH,   "finish"  },
+    { EVT_ERROR,    "error"   }
+  };
+  SetValidEvents(6, events);
 }
 
 Replay::~Replay()
@@ -91,6 +113,9 @@ Replay::~Replay()
  *   'message'              - Message received                        - function (message) { }
  *   'finish'               - Replay finished, all messages received  - function () { }
  *   'error'                - Replay error occurred                   - function (err) { }
+ *   'pause'                - Replay paused                           - function (err) { }
+ *   'resume'               - Replay resumed                          - function (err) { }
+ *   'stop'                 - Replay stopped                          - function (err) { }
  *
  * message = {
  *     topic,                 (string : message topic)
@@ -112,32 +137,12 @@ Handle<Value> Replay::On(const Arguments& args)
   String::AsciiValue evt(args[0]->ToString());
   Local<Function> handler = Local<Function>::Cast(args[1]);
 
-  replay->SetEventHandler(*evt, handler);
+  if (replay->AddListener(*evt, Persistent<Function>::New(handler)) == false)
+  {
+    THROW_INVALID_EVENT_LISTENER("replay", *evt);
+  }
 
   return scope.Close(args.This());
-}
-
-/*-----------------------------------------------------------------------------
- * Set subscription event handler
- */
-void Replay::SetEventHandler(char* evt, Local<Function> handler)
-{
-  if (tva_str_casecmp(evt, "message") == 0)
-  {
-    _messageHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else if (tva_str_casecmp(evt, "finish") == 0)
-  {
-    _finishHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else if (tva_str_casecmp(evt, "error") == 0)
-  {
-    _errorHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else
-  {
-    THROW_INVALID_EVENT_LISTENER("replay", evt);
-  }
 }
 
 
@@ -149,174 +154,16 @@ void Replay::SetEventHandler(char* evt, Local<Function> handler)
 void Replay::MessageReceivedEvent(TVA_MESSAGE* message, void* context)
 {
   Replay* replay = (Replay*)context;
-  TVA_STATUS rc = TVA_ERROR;
-
   MessageEvent messageEvent;
-  messageEvent.tvaMessage = message;
-  messageEvent.generationTime = message->msgGenerationTime;
-  messageEvent.receiveTime = message->msgReceiveTime;
-  messageEvent.isLastMessage = (TVA_MSG_ISLAST(message) != 0);
-  tva_strncpy(messageEvent.topic, message->topicName, sizeof(messageEvent.topic));
 
-  TVA_MESSAGE_DATA_HANDLE msgData = message->messageData;
-  TVA_FIELD_ITERATOR_HANDLE fieldItr;
-  TVA_MSG_FIELD_INFO fieldInfo;
-
-  do
-  {
-    rc = tvaCreateMessageFieldIterator(msgData, &fieldItr);
-    if (rc != TVA_OK) break;
-
-    rc = tvaMsgFieldNext(fieldItr, &fieldInfo);
-    while (rc == TVA_OK)
-    {
-      MessageFieldData field;
-      char* fieldName;
-      rc = tvaGetFieldNameFromFieldId(msgData, fieldInfo.fieldId, &fieldName);
-      if (rc == TVA_OK)
-      {
-        tva_strncpy(field.name, fieldName, sizeof(field.name));
-        tvaReleaseFieldName(fieldName);
-      }
-      else
-      {
-        field.name[0] = 0;
-      }
-
-      switch (fieldInfo.fieldType)
-      {
-      case FIELD_TYPE_BOOLEAN:
-        {
-          TVA_BOOLEAN val;
-          rc = tvaGetBooleanFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeBoolean;
-            field.value.boolValue = (val) ? true : false;
-          }
-        }
-        break;
-
-      case FIELD_TYPE_BYTE:
-        {
-          TVA_UINT8 val;
-          rc = tvaGetByteFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeNumber;
-            field.value.numberValue = (double)val;
-          }
-        }
-        break;
-
-      case FIELD_TYPE_SHORT:
-        {
-          TVA_INT16 val;
-          rc = tvaGetShortFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeNumber;
-            field.value.numberValue = (double)val;
-          }
-        }
-        break;
-
-      case FIELD_TYPE_INTEGER:
-        {
-          TVA_INT32 val;
-          rc = tvaGetIntFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeNumber;
-            field.value.numberValue = (double)val;
-          }
-        }
-        break;
-
-      case FIELD_TYPE_LONG:
-        {
-          TVA_INT64 val;
-          rc = tvaGetLongFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeNumber;
-            field.value.numberValue = (double)val;
-          }
-        }
-        break;
-
-      case FIELD_TYPE_FLOAT:
-        {
-          TVA_FLOAT val;
-          rc = tvaGetFloatFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeNumber;
-            field.value.numberValue = (double)val;
-          }
-        }
-        break;
-
-      case FIELD_TYPE_DOUBLE:
-        {
-          TVA_DOUBLE val;
-          rc = tvaGetDoubleFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeNumber;
-            field.value.numberValue = (double)val;
-          }
-        }
-        break;
-
-      case FIELD_TYPE_DATETIME:
-        {
-          TVA_DATE val;
-          rc = tvaGetDateTimeFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeDate;
-            field.value.dateValue = val;
-          }
-        }
-        break;
-
-      case FIELD_TYPE_STRING:
-        {
-          TVA_STRING val;
-          rc = tvaGetStringFromMessageByFieldId(msgData, fieldInfo.fieldId, &val);
-          if (rc == TVA_OK)
-          {
-            field.type = MessageFieldDataTypeString;
-            field.value.stringValue = val;
-          }
-        }
-        break;
-
-      default:
-        rc = TVA_ERR_NOT_IMPLEMENTED;
-        break;
-      }
-
-      if (rc == TVA_OK)
-      {
-        messageEvent.fieldData.push_back(field);
-      }
-
-      rc = tvaMsgFieldNext(fieldItr, &fieldInfo);
-    }
-
-    if (rc == TVA_ERR_NO_FIELDS_REMAINING)
-    {
-      rc = TVA_OK;
-    }
-  } while (0);
-
-  tvaReleaseMessageData(message);
-
+  TVA_STATUS rc = Subscription::ProcessRecievedMessage(message, messageEvent);
   if (rc == TVA_OK)
   {
-    replay->PostMessageEvent(messageEvent);
+    if (!replay->PostMessageEvent(messageEvent))
+    {
+      // Post failed, need to release the message
+      tvaReleaseMessageData(message);
+    }
   }
 }
 
@@ -341,69 +188,26 @@ void Replay::MessageAsyncEvent(uv_async_t* async, int status)
  */
 void Replay::InvokeJsMessageEvent(Local<Object> context, MessageEvent& messageEvent)
 {
-  size_t fieldCount = messageEvent.fieldData.size();
-  Local<Object> fields = Object::New();
-  for (size_t i = 0; i < fieldCount; i++)
+  Local<Object> message = Subscription::CreateJsMessageObject(messageEvent);
+  Handle<Value> argv[] = { message };
+
+  TryCatch tryCatch;
+
+  Emit(EVT_MESSAGE, 1, argv);
+  if (tryCatch.HasCaught())
   {
-    MessageFieldData* field = &messageEvent.fieldData[i];
-    switch (field->type)
-    {
-    case MessageFieldDataTypeBoolean:
-      fields->Set(String::NewSymbol(field->name), Boolean::New(field->value.boolValue));
-      break;
-
-    case MessageFieldDataTypeNumber:
-      fields->Set(String::NewSymbol(field->name), Number::New(field->value.numberValue));
-      break;
-
-    case MessageFieldDataTypeDate:
-      fields->Set(String::NewSymbol(field->name), Date::New((double)(field->value.dateValue.timeInMicroSecs / 1000)));
-      break;
-
-    case MessageFieldDataTypeString:
-      fields->Set(String::NewSymbol(field->name), String::New(field->value.stringValue));
-      tvaReleaseFieldValue(field->value.stringValue);
-      break;
-
-    default:
-      break;
-    }
-  }
-
-  Local<Object> message = Object::New();
-  message->Set(String::NewSymbol("topic"), String::New(messageEvent.topic));
-  message->Set(String::NewSymbol("generationTime"), Date::New((double)(messageEvent.generationTime / 1000)));
-  message->Set(String::NewSymbol("receiveTime"), Date::New((double)(messageEvent.receiveTime / 1000)));
-  message->Set(String::NewSymbol("fields"), fields);
-  message->Set(String::NewSymbol("reserved"), Number::New((double)((intptr_t)(messageEvent.tvaMessage))));
-
-  Handle<Value> argv[1];
-  argv[0] = message;
-
-  for (size_t i = 0; i < _messageHandler.size(); i++)
-  {
-    TryCatch tryCatch;
-    _messageHandler[i]->Call(context, 1, argv);
-    if (tryCatch.HasCaught())
-    {
-      node::FatalException(tryCatch);
-    }
+    node::FatalException(tryCatch);
   }
 
   if (messageEvent.isLastMessage)
   {
-    for (size_t i = 0; i < _finishHandler.size(); i++)
-    {
-      TryCatch tryCatch;
-      _finishHandler[i]->Call(context, 1, argv);
-      if (tryCatch.HasCaught())
-      {
-        node::FatalException(tryCatch);
-      }
-    }
+    Emit(EVT_FINISH, 1, argv);
 
     MarkInUse(false);
   }
+
+  // All messages must be released.
+  tvaReleaseMessageData(messageEvent.tvaMessage);
 }
 
 
@@ -444,14 +248,12 @@ void Replay::InvokeJsNotificationEvent(Local<Object> context, TVA_STATUS rc)
   Handle<Value> argv[1];
   argv[0] = String::New(tvaErrToStr(rc));
 
-  for (size_t i = 0; i < _errorHandler.size(); i++)
+  TryCatch tryCatch;
+
+  Emit(EVT_ERROR, 1, argv);
+  if (tryCatch.HasCaught())
   {
-    TryCatch tryCatch;
-    _errorHandler[i]->Call(context, 1, argv);
-    if (tryCatch.HasCaught())
-    {
-      node::FatalException(tryCatch);
-    }
+    node::FatalException(tryCatch);
   }
 }
 
@@ -463,33 +265,29 @@ struct ReplayPauseResumeRequest
   Replay* replay;
   bool isPause;
   TVA_STATUS result;
-  Persistent<Function> complete;
 };
 
 /*-----------------------------------------------------------------------------
  * Pause the replay
  *
- * replay.pause(function (err) {
- *     // Replay pause complete
- * });
+ * replay.pause([callback]);
  */
 Handle<Value> Replay::Pause(const Arguments& args)
 {
   HandleScope scope;
   Replay* replay = ObjectWrap::Unwrap<Replay>(args.This());
 
-  // Arguments checking
-  PARAM_REQ_NUM(1, args.Length());
-  PARAM_REQ_FUNCTION(0, args);        // complete
-
-  // Ready arguments
-  Local<Function> complete = Local<Function>::Cast(args[0]);
+  if (args.Length() > 0)
+  {
+    // Read arguments
+    Local<Function> complete = Local<Function>::Cast(args[0]);
+    replay->AddOnceListener(EVT_PAUSE, Persistent<Function>::New(complete));
+  }
 
   // Send data to worker thread
   ReplayPauseResumeRequest* request = new ReplayPauseResumeRequest;
   request->replay = replay;
   request->isPause = true;
-  request->complete = Persistent<Function>::New(complete);
 
   uv_work_t* req = new uv_work_t();
   req->data = request;
@@ -502,27 +300,24 @@ Handle<Value> Replay::Pause(const Arguments& args)
 /*-----------------------------------------------------------------------------
  * Resume the replay
  *
- * replay.resume(function (err) {
- *     // Replay resume complete
- * });
+ * replay.resume([callback]);
  */
 Handle<Value> Replay::Resume(const Arguments& args)
 {
   HandleScope scope;
   Replay* replay = ObjectWrap::Unwrap<Replay>(args.This());
 
-  // Arguments checking
-  PARAM_REQ_NUM(1, args.Length());
-  PARAM_REQ_FUNCTION(0, args);        // complete
-
-  // Ready arguments
-  Local<Function> complete = Local<Function>::Cast(args[0]);
+  if (args.Length() > 0)
+  {
+    // Read arguments
+    Local<Function> complete = Local<Function>::Cast(args[0]);
+    replay->AddOnceListener(EVT_RESUME, Persistent<Function>::New(complete));
+  }
 
   // Send data to worker thread
   ReplayPauseResumeRequest* request = new ReplayPauseResumeRequest;
   request->replay = replay;
   request->isPause = false;
-  request->complete = Persistent<Function>::New(complete);
 
   uv_work_t* req = new uv_work_t();
   req->data = request;
@@ -570,8 +365,15 @@ void Replay::PauseResumeWorkerComplete(uv_work_t* req)
 
   TryCatch tryCatch;
 
-  request->complete->Call(Context::GetCurrent()->Global(), 1, argv);
-  request->complete.Dispose();
+  if (request->isPause)
+  {
+    request->replay->Emit(EVT_PAUSE, 1, argv);
+  }
+  else
+  {
+    request->replay->Emit(EVT_RESUME, 1, argv);
+  }
+
   if (tryCatch.HasCaught())
   {
     node::FatalException(tryCatch);
@@ -587,32 +389,28 @@ struct ReplayStopRequest
 {
   Replay* replay;
   TVA_STATUS result;
-  Persistent<Function> complete;
 };
 
 /*-----------------------------------------------------------------------------
  * Stop the replay
  *
- * replay.stop(function (err) {
- *     // Replay stop complete
- * });
+ * replay.stop([callback]);
  */
 Handle<Value> Replay::Stop(const Arguments& args)
 {
   HandleScope scope;
   Replay* replay = ObjectWrap::Unwrap<Replay>(args.This());
 
-  // Arguments checking
-  PARAM_REQ_NUM(1, args.Length());
-  PARAM_REQ_FUNCTION(0, args);        // complete
-
-  // Ready arguments
-  Local<Function> complete = Local<Function>::Cast(args[0]);
+  if (args.Length() > 0)
+  {
+    // Read arguments
+    Local<Function> complete = Local<Function>::Cast(args[0]);
+    replay->AddOnceListener(EVT_STOP, Persistent<Function>::New(complete));
+  }
 
   // Send data to worker thread
   ReplayStopRequest* request = new ReplayStopRequest;
   request->replay = replay;
-  request->complete = Persistent<Function>::New(complete);
 
   uv_work_t* req = new uv_work_t();
   req->data = request;
@@ -654,8 +452,8 @@ void Replay::StopWorkerComplete(uv_work_t* req)
 
   TryCatch tryCatch;
 
-  request->complete->Call(Context::GetCurrent()->Global(), 1, argv);
-  request->complete.Dispose();
+  request->replay->Emit(EVT_STOP, 1, argv);
+
   if (tryCatch.HasCaught())
   {
     node::FatalException(tryCatch);

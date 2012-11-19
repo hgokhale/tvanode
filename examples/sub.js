@@ -228,20 +228,23 @@ function startSubscription(session, topic, subscriptions, topics, maxCount) {
                         var fieldType = "???";
 
                         if (typeof fieldData === "number") {
-                            fieldType = "NUMBER";
+                            fieldType = "NUMBER ";
                         }
                         else if (typeof fieldData === "string") {
-                            fieldType = "STRING";
+                            fieldType = "STRING ";
                         }
                         else if (typeof fieldData === "boolean") {
                             fieldType = "BOOLEAN";
                         }
                         else if (typeof fieldData === "object") {
                             if (fieldData.constructor == (new Date).constructor) {
-                                fieldType = "DATE";
+                                fieldType = "DATE   ";
+                            }
+                            else if (fieldData.constructor == (new Array).constructor) {
+                                fieldType = "ARRAY  ";
                             }
                         }
-                        console.log("  => %s:%s = " + fieldData, fieldType, fieldName);
+                        console.log("  => %s : %s = " + fieldData, fieldType, fieldName);
                     }
                 }
 
@@ -259,7 +262,7 @@ function startSubscription(session, topic, subscriptions, topics, maxCount) {
                 }
             });
 
-            console.log("Created subscription on " + topic);
+            console.log("Created %s subscription on %s", sub.qos, sub.topic);
             subscriptions.push(sub);
             topics.push(topic);
 

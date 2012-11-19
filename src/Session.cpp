@@ -14,6 +14,17 @@
 
 using namespace v8;
 
+enum SessionEvent
+{
+  EVT_CONNECT_INFO = 0,
+  EVT_CONNECT_LOST,
+  EVT_CONNECT_RESTORED,
+  EVT_CLOSE,
+  EVT_GDS_LOST,
+  EVT_GDS_RESTORED,
+  EVT_NOTIFY
+};
+
 Persistent<Function> Session::constructor;
 
 /*-----------------------------------------------------------------------------
@@ -71,6 +82,18 @@ Session::Session()
   _gdAckWindow = NULL;
   uv_mutex_init(&_sessionEventLock);
   uv_mutex_init(&_gdSendLock);
+
+  EventEmitterConfiguration events[] = 
+  {
+    { EVT_CONNECT_INFO,     "connection-info"     },
+    { EVT_CONNECT_LOST,     "connection-lost"     },
+    { EVT_CONNECT_RESTORED, "connection-restored" },
+    { EVT_CLOSE,            "close"               },
+    { EVT_GDS_LOST,         "gds-lost"            },
+    { EVT_GDS_RESTORED,     "gds-restored"        },
+    { EVT_NOTIFY,           "notify"              }
+  };
+  SetValidEvents(7, events);
 }
 
 Session::~Session()
@@ -88,35 +111,6 @@ Session::~Session()
     delete[] _gdAckWindow;
   }
 
-  for (size_t i = 0; i < _disconnectHandler.size(); i++)
-  {
-    _disconnectHandler[i].Dispose();
-  }
-  for (size_t i = 0; i < _reconnectHandler.size(); i++)
-  {
-    _reconnectHandler[i].Dispose();
-  }
-  for (size_t i = 0; i < _terminateHandler.size(); i++)
-  {
-    _terminateHandler[i].Dispose();
-  }
-  for (size_t i = 0; i < _connInfoHandler.size(); i++)
-  {
-    _connInfoHandler[i].Dispose();
-  }
-  for (size_t i = 0; i < _gdsLostHandler.size(); i++)
-  {
-    _gdsLostHandler[i].Dispose();
-  }
-  for (size_t i = 0; i < _gdsRestoreHandler.size(); i++)
-  {
-    _gdsRestoreHandler[i].Dispose();
-  }
-  for (size_t i = 0; i < _defaultHandler.size(); i++)
-  {
-    _defaultHandler[i].Dispose();
-  }
-
   uv_mutex_destroy(&_sessionEventLock);
   uv_mutex_destroy(&_gdSendLock);
 }
@@ -130,10 +124,10 @@ Session::~Session()
  * session.on(event, listener);
  *
  * Events / Listeners:
+ *   'connection-info'         - Initial connection info                 - function (activeTmx, standbyTmx) { }
  *   'connection-lost'      - Connection lost (will auto-reconnect)   - function () { }
  *   'connection-restored'  - Reconnected after connection lost       - function () { }
  *   'close'                - Session closed                          - function () { }
- *   'connect-info'         - Initial connection info                 - function (activeTmx, standbyTmx) { }
  *   'gds-lost'             - GDS communications lost                 - function () { }
  *   'gds-restored'         - GDS communications restored             - function () { }
  *   'notify'               - Misc. session notification event        - function (code, msg) { }
@@ -151,48 +145,12 @@ Handle<Value> Session::On(const Arguments& args)
   String::AsciiValue evt(args[0]->ToString());
   Local<Function> handler = Local<Function>::Cast(args[1]);
 
-  session->SetEventHandler(*evt, handler);
+  if (session->AddListener(*evt, Persistent<Function>::New(handler)) == false)
+  {
+    THROW_INVALID_EVENT_LISTENER("session", *evt);
+  }
 
   return scope.Close(args.This());
-}
-
-/*-----------------------------------------------------------------------------
- * Set session event handler
- */
-void Session::SetEventHandler(char* evt, Local<Function> handler)
-{
-  if (tva_str_casecmp(evt, "connection-lost") == 0)
-  {
-    _disconnectHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else if (tva_str_casecmp(evt, "connection-restored") == 0)
-  {
-    _reconnectHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else if (tva_str_casecmp(evt, "close") == 0)
-  {
-    _terminateHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else if (tva_str_casecmp(evt, "connection-info") == 0)
-  {
-    _connInfoHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else if (tva_str_casecmp(evt, "gds-lost") == 0)
-  {
-    _gdsLostHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else if (tva_str_casecmp(evt, "gds-restored") == 0)
-  {
-    _gdsRestoreHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else if (tva_str_casecmp(evt, "notify") == 0)
-  {
-    _defaultHandler.push_back(Persistent<Function>::New(handler));
-  }
-  else
-  {
-    THROW_INVALID_EVENT_LISTENER("session", evt);
-  }
 }
 
 
@@ -383,14 +341,14 @@ void Session::SessionNotificationAsyncEvent(uv_async_t* async, int status)
  */
 void Session::InvokeJsSessionNotification(Local<Object> context, SessionNotificaton& notification)
 {
-  bool handled = false;
+  int emitCount = 0;
 
   TVA_UINT32 code = notification.code;
   if ((code == TVA_EVT_GD_ACK_RECV) ||
       (code == TVA_ERR_GD_MSG_TIMEOUT) ||
       (code == TVA_ERR_GD_MSG_TOO_MANY_RETRANSMITS))
   {
-    Handle<Value> argv[1];
+    Handle<Value> argv[2];
 
     if (code == TVA_EVT_GD_ACK_RECV)
     {
@@ -404,14 +362,23 @@ void Session::InvokeJsSessionNotification(Local<Object> context, SessionNotifica
     TryCatch tryCatch;
 
     GdAckWindowEntry* entry = &_gdAckWindow[notification.data.messageId];
-    entry->complete->Call(context, 1, argv);
+    argv[1] = entry->origMessage;
+
+    if (!entry->complete.IsEmpty())
+    {
+      entry->complete->Call(context, 2, argv);
+      entry->complete.Dispose();
+    }
+
+    entry->publisher->SendMessageComplete(2, argv);
+
     if (tryCatch.HasCaught())
     {
       node::FatalException(tryCatch);
     }
 
-    entry->complete.Dispose();
-    handled = true;
+    entry->origMessage.Dispose();
+    emitCount = 1;
   }
   else if ((code == TVA_EVT_TMX_CONN_SINGLE) || (code == TVA_EVT_TMX_CONN_FT))
   {
@@ -427,120 +394,45 @@ void Session::InvokeJsSessionNotification(Local<Object> context, SessionNotifica
       argv[1] = Undefined();
     }
 
-    for (size_t i = 0; i < _connInfoHandler.size(); i++)
-    {
-      TryCatch tryCatch;
-
-      _connInfoHandler[i]->Call(context, 2, argv);
-      if (tryCatch.HasCaught())
-      {
-        node::FatalException(tryCatch);
-      }
-    }
-
-    handled = (bool)(_connInfoHandler.size() > 0);
+    emitCount = Emit(EVT_CONNECT_INFO, 2, argv);
   }
   else if (code == TVA_ERR_TMX_FAILED)
   {
     Handle<Value> argv[1] = { Undefined() };
-    for (size_t i = 0; i < _disconnectHandler.size(); i++)
-    {
-      TryCatch tryCatch;
-
-      _disconnectHandler[i]->Call(context, 0, argv);
-      if (tryCatch.HasCaught())
-      {
-        node::FatalException(tryCatch);
-      }
-    }
-
-    handled = (bool)(_disconnectHandler.size() > 0);
+    emitCount = Emit(EVT_CONNECT_LOST, 0, argv);
   }
   else if (code == TVA_EVT_TMX_RECONNECT)
   {
     Handle<Value> argv[1] = { Undefined() };
-    for (size_t i = 0; i < _reconnectHandler.size(); i++)
-    {
-      TryCatch tryCatch;
-
-      _reconnectHandler[i]->Call(context, 0, argv);
-      if (tryCatch.HasCaught())
-      {
-        node::FatalException(tryCatch);
-      }
-    }
-
-    handled = (bool)(_reconnectHandler.size() > 0);
+    emitCount = Emit(EVT_CONNECT_RESTORED, 0, argv);
   }
   else if (code == TVA_ERR_GDS_COMM_LOST)
   {
     Handle<Value> argv[1] = { Undefined() };
-    for (size_t i = 0; i < _gdsLostHandler.size(); i++)
-    {
-      TryCatch tryCatch;
-
-      _gdsLostHandler[i]->Call(context, 0, argv);
-      if (tryCatch.HasCaught())
-      {
-        node::FatalException(tryCatch);
-      }
-    }
-
-    handled = (bool)(_gdsLostHandler.size() > 0);
+    emitCount = Emit(EVT_GDS_LOST, 0, argv);
   }
   else if (code == TVA_EVT_GDS_COMM_RESTORED)
   {
     Handle<Value> argv[1] = { Undefined() };
-    for (size_t i = 0; i < _gdsRestoreHandler.size(); i++)
-    {
-      TryCatch tryCatch;
-
-      _gdsRestoreHandler[i]->Call(context, 0, argv);
-      if (tryCatch.HasCaught())
-      {
-        node::FatalException(tryCatch);
-      }
-    }
-
-    handled = (bool)(_gdsRestoreHandler.size() > 0);
+    emitCount = Emit(EVT_GDS_RESTORED, 0, argv);
   }
   else if (code == TVA_EVT_SESSION_TERMINATED)
   {
     // Notify application
     Handle<Value> argv[1] = { Undefined() };
-    for (size_t i = 0; i < _terminateHandler.size(); i++)
-    {
-      TryCatch tryCatch;
-
-      _terminateHandler[i]->Call(context, 0, argv);
-      if (tryCatch.HasCaught())
-      {
-        node::FatalException(tryCatch);
-      }
-    }
-
-    handled = (bool)(_terminateHandler.size() > 0);
+    emitCount = Emit(EVT_CLOSE, 0, argv);
 
     // Perform cleanup
     MarkInUse(false);
   }
   
-  if (!handled)
+  if (emitCount == 0)
   {
     Handle<Value> argv[2];
     argv[0] = Number::New(code);
     argv[1] = String::New(tvaErrToStr(code));
 
-    for (size_t i = 0; i < _defaultHandler.size(); i++)
-    {
-      TryCatch tryCatch;
-
-      _defaultHandler[i]->Call(context, 2, argv);
-      if (tryCatch.HasCaught())
-      {
-        node::FatalException(tryCatch);
-      }
-    }
+    Emit(EVT_NOTIFY, 2, argv);
   }
 }
 
@@ -554,7 +446,8 @@ void Session::SessionHandleCloseComplete(uv_handle_t* handle)
 /*-----------------------------------------------------------------------------
  * Send a GD message
  */
-TVA_STATUS Session::SendGdMessage(Publication* publisher, TVA_PUBLISH_MESSAGE_DATA_HANDLE messageData, Persistent<Function> complete)
+TVA_STATUS Session::SendGdMessage(Publication* publisher, TVA_PUBLISH_MESSAGE_DATA_HANDLE messageData, 
+                                  Persistent<Object> origMessage, Persistent<Function> complete)
 {
   TVA_STATUS rc = TVA_ERR_GD_ONLY;
 
@@ -567,6 +460,7 @@ TVA_STATUS Session::SendGdMessage(Publication* publisher, TVA_PUBLISH_MESSAGE_DA
 
     GdAckWindowEntry* entry = &_gdAckWindow[idx];
     entry->publisher = publisher;
+    entry->origMessage = origMessage;
     entry->complete = complete;
     rc = tvagdMsgSend(_gdHandle, messageData, idx);
   }

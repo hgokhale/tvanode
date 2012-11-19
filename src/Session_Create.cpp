@@ -115,6 +115,7 @@ void Session::CreatePublicationWorker(uv_work_t* req)
   {
     Publication* publication = new Publication(request->session);
     publication->SetHandle(publisher);
+    publication->SetTopic(request->topic);
 
     /* Tervela API versions 5.1.5 and above support retrieving the QoS of a publication
        after it was created.  This allows the node library to use the same set of functions

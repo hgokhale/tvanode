@@ -11,6 +11,12 @@
 
 using namespace v8;
 
+enum PublicationEvent
+{
+  EVT_MESSAGE = 0,
+  EVT_STOP
+};
+
 Persistent<Function> Publication::constructor;
 
 
@@ -25,6 +31,7 @@ void Publication::Init(Handle<Object> target)
   t->SetClassName(String::NewSymbol("Publication"));
   t->InstanceTemplate()->SetInternalFieldCount(1);
 
+  t->PrototypeTemplate()->Set(String::NewSymbol("on"), FunctionTemplate::New(On)->GetFunction());
   t->PrototypeTemplate()->Set(String::NewSymbol("sendMessage"), FunctionTemplate::New(SendMessage)->GetFunction());
   t->PrototypeTemplate()->Set(String::NewSymbol("stop"), FunctionTemplate::New(Stop)->GetFunction());
 
@@ -49,6 +56,22 @@ Handle<Value> Publication::NewInstance(Publication* publication)
   Handle<Value> argv[1] = { wrapper };
   Local<Object> instance = constructor->NewInstance(1, argv);
 
+  instance->Set(String::NewSymbol("topic"), String::New(publication->GetTopic()), ReadOnly);
+  switch (publication->GetQos())
+  {
+  case TVA_QOS_BEST_EFFORT:
+    instance->Set(String::NewSymbol("qos"), String::New("BE"), ReadOnly);
+    break;
+
+  case TVA_QOS_GUARANTEED_CONNECTED:
+    instance->Set(String::NewSymbol("qos"), String::New("GC"), ReadOnly);
+    break;
+
+  case TVA_QOS_GUARANTEED_DELIVERY:
+    instance->Set(String::NewSymbol("qos"), String::New("GD"), ReadOnly);
+    break;
+  }
+
   return scope.Close(instance);
 }
 
@@ -59,8 +82,16 @@ Publication::Publication(Session* session)
 {
   _session = session;
   _handle = TVA_INVALID_HANDLE;
+  _topic = NULL;
   _qos = TVA_QOS_BEST_EFFORT;
   uv_mutex_init(&_sendLock);
+
+  EventEmitterConfiguration events[] = 
+  {
+    { EVT_MESSAGE,  "send-message" },
+    { EVT_STOP,     "stop"    },
+  };
+  SetValidEvents(2, events);
 }
 
 Publication::~Publication()
@@ -69,7 +100,44 @@ Publication::~Publication()
   {
     tvaCancelPublication(_handle, TVA_INVALID_HANDLE);
   }
+  if (_topic)
+  {
+    free(_topic);
+  }
   uv_mutex_destroy(&_sendLock);
+}
+
+
+/*****     On     *****/
+
+/*-----------------------------------------------------------------------------
+  * Register for publication events
+  *
+  * publication.on(event, listener);
+  *
+  * Events / Listeners:
+  *   'message-send'         - Message sent                            - function (message, err) { }
+  *   'stop'                 - Publication stopped                     - function (err) { }
+  */
+Handle<Value> Publication::On(const Arguments& args)
+{
+  HandleScope scope;
+  Publication* publication = ObjectWrap::Unwrap<Publication>(args.This());
+
+  // Arguments checking
+  PARAM_REQ_NUM(2, args.Length());
+  PARAM_REQ_STRING(0, args);          // event
+  PARAM_REQ_FUNCTION(1, args);        // handler
+
+  String::AsciiValue evt(args[0]->ToString());
+  Local<Function> handler = Local<Function>::Cast(args[1]);
+
+  if (publication->AddListener(*evt, Persistent<Function>::New(handler)) == false)
+  {
+    THROW_INVALID_EVENT_LISTENER("publication", *evt);
+  }
+
+  return scope.Close(args.This());
 }
 
 
@@ -80,38 +148,28 @@ class SendMessageRequest
 public:
   Publication* publication;
   char topic[256];
-  std::vector<MessageFieldData> fieldData;
+  std::list<MessageFieldData> fieldData;
   bool useSelfDescribing;
   bool invokeCallback;
+  int messageType;
   TVA_STATUS result;
   Persistent<Function> complete;
+  Persistent<Object> origMessage;
 
   SendMessageRequest(Publication* pub)
   {
     publication = pub;
     topic[0] = 0;
+    messageType = 0;
     useSelfDescribing = false;
-    invokeCallback = true;
-  }
-
-  bool IsComplete()
-  {
-    bool isComplete = true;
-    if ((topic[0] == 0) || (complete.IsEmpty()))
-    {
-      isComplete = false;
-    }
-
-    return isComplete;
+    invokeCallback = false;
   }
 };
 
 /*-----------------------------------------------------------------------------
  * Send a message
  *
- * publication.sendMessage(topic, message, {options}, function (err) {
- *     // Send message complete
- * });
+ * publication.sendMessage(topic, message, [options], [callback]);
  *
  * // None of the members of the options object are required
  * options = {
@@ -124,7 +182,7 @@ Handle<Value> Publication::SendMessage(const Arguments& args)
   Publication* pub = ObjectWrap::Unwrap<Publication>(args.This());
 
   // Arguments checking
-  PARAM_REQ_NUM(3, args.Length());
+  PARAM_REQ_NUM(2, args.Length());
   PARAM_REQ_STRING(0, args);        // topic
   PARAM_REQ_OBJECT(1, args);        // message
 
@@ -132,25 +190,28 @@ Handle<Value> Publication::SendMessage(const Arguments& args)
   String::AsciiValue topic(args[0]->ToString());
   Local<Object> message = Local<Object>::Cast(args[1]);
   Local<Object> options;
+  Local<Function> complete;
+  bool parseOptions = false;
 
   SendMessageRequest* request = new SendMessageRequest(pub);
   tva_strncpy(request->topic, *topic, sizeof(request->topic));
 
-  if (args.Length() == 3)
+  // Check for additional optional arguments
+  for (int i = 2; i < args.Length(); i++)
   {
-    // No options
-    PARAM_REQ_FUNCTION(2, args);    // complete
-
-    Local<Function> complete = Local<Function>::Cast(args[2]);
-    request->complete = Persistent<Function>::New(complete);
+    if (args[i]->IsFunction())
+    {
+      complete = Local<Function>::Cast(args[i]);
+    }
+    else if (args[i]->IsObject())
+    {
+      options = Local<Object>::Cast(args[i]);
+      parseOptions = true;
+    }
   }
-  else
-  {
-    // Options included
-    PARAM_REQ_OBJECT(2, args);      // options
-    PARAM_REQ_FUNCTION(3, args);    // complete
 
-    Local<Object> options = Local<Object>::Cast(args[2]);
+  if (parseOptions)
+  {
     std::vector<std::string> optionNames = cvv8::CastFromJS<std::vector<std::string> >(options->GetPropertyNames());
     for (size_t i = 0; i < optionNames.size(); i++)
     {
@@ -166,9 +227,25 @@ Handle<Value> Publication::SendMessage(const Arguments& args)
       {
         request->useSelfDescribing = optionValue->BooleanValue();
       }
+#ifdef TVA_MSG_ISFROMJMS
+      else if (tva_str_casecmp(optionName, "messageType") == 0)
+      {
+        String::AsciiValue messageType(optionValue->ToString());
+        if (tva_str_casecmp(*messageType, "text") == 0)
+        {
+          request->messageType = TVA_JMS_MSG_TYPE_TEXT;
+        }
+        else
+        {
+          request->messageType = TVA_JMS_MSG_TYPE_MAP;
+        }
+      }
+#endif
     }
+  }
 
-    Local<Function> complete = Local<Function>::Cast(args[3]);
+  if (!complete.IsEmpty())
+  {
     request->complete = Persistent<Function>::New(complete);
   }
 
@@ -186,6 +263,11 @@ Handle<Value> Publication::SendMessage(const Arguments& args)
     {
       field.type = MessageFieldDataTypeBoolean;
       field.value.boolValue = fieldValue->BooleanValue();
+    }
+    else if (fieldValue->IsInt32())
+    {
+      field.type = MessageFieldDataTypeInt32;
+      field.value.int32Value = fieldValue->Int32Value();
     }
     else if (fieldValue->IsNumber())
     {
@@ -211,12 +293,14 @@ Handle<Value> Publication::SendMessage(const Arguments& args)
     request->fieldData.push_back(field);
   }
 
+  request->origMessage = Persistent<Object>::New(message);
+
   uv_work_t* req = new uv_work_t();
   req->data = request;
 
   uv_queue_work(uv_default_loop(), req, Publication::SendMessageWorker, Publication::SendMessageWorkerComplete);
 
-  return scope.Close(Undefined());
+  return scope.Close(args.This());
 }
 
 /*-----------------------------------------------------------------------------
@@ -235,7 +319,7 @@ void Publication::SendMessageWorker(uv_work_t* req)
     if (request->useSelfDescribing)
     {
       // Create a new self describing message
-      rc = tvaSelfDescMsgTNew(publication->GetHandle(), request->topic, TVA_INVALID_HANDLE, request->fieldData.size(), &messageData);
+      rc = tvaSelfDescMsgTNew(publication->GetHandle(), request->topic, TVA_INVALID_HANDLE, (TVA_UINT32)request->fieldData.size(), &messageData);
       if (rc != TVA_OK) break;
     }
     else
@@ -245,27 +329,40 @@ void Publication::SendMessageWorker(uv_work_t* req)
       if (rc != TVA_OK) break;
     }
 
-    // Loop through the fields in the message object from JavaScript and add fields to the Tervela message
-    for (size_t i = 0; i < request->fieldData.size(); i++)
+#ifdef TVA_MSG_ISFROMJMS
+    if (request->messageType == TVA_JMS_MSG_TYPE_TEXT)
     {
-      MessageFieldData* field = &request->fieldData[i];
-      switch (field->type)
+      tvaPubMsgInfoSet(messageData, TVA_PUBMSGINFO_JMS_MSG_TYPE, &request->messageType, (TVA_INT32)sizeof(request->messageType));
+    }
+#endif
+
+    // Loop through the fields in the message object from JavaScript and add fields to the Tervela message
+    while (!request->fieldData.empty())
+    {
+      MessageFieldData field = request->fieldData.front();
+      request->fieldData.pop_front();
+
+      switch (field.type)
       {
       case MessageFieldDataTypeNumber:
-        rc = tvaSetDoubleIntoMessageByFieldName(messageData, field->name, field->value.numberValue);
+        rc = tvaSetDoubleIntoMessageByFieldName(messageData, field.name, field.value.numberValue);
+        break;
+
+      case MessageFieldDataTypeInt32:
+        rc = tvaSetIntIntoMessageByFieldName(messageData, field.name, field.value.int32Value);
         break;
 
       case MessageFieldDataTypeString:
-        rc = tvaSetStringIntoMessageByFieldName(messageData, field->name, field->value.stringValue);
-        free(field->value.stringValue);
+        rc = tvaSetStringIntoMessageByFieldName(messageData, field.name, field.value.stringValue);
+        free(field.value.stringValue);
         break;
 
       case MessageFieldDataTypeBoolean:
-        rc = tvaSetBooleanIntoMessageByFieldName(messageData, field->name, field->value.boolValue);
+        rc = tvaSetBooleanIntoMessageByFieldName(messageData, field.name, field.value.boolValue);
         break;
 
       case MessageFieldDataTypeDate:
-        rc = tvaSetDateTimeIntoMessageByFieldName(messageData, field->name, field->value.dateValue);
+        rc = tvaSetDateTimeIntoMessageByFieldName(messageData, field.name, field.value.dateValue);
         break;
 
       default:
@@ -274,7 +371,11 @@ void Publication::SendMessageWorker(uv_work_t* req)
         break;
       }
 
-      if (rc != TVA_OK) break;
+      if (rc != TVA_OK)
+      {
+        request->fieldData.clear();
+        break;
+      }
     }
 
     if (rc == TVA_OK)
@@ -284,7 +385,7 @@ void Publication::SendMessageWorker(uv_work_t* req)
       // Send the Tervela message
       if (publication->GetQos() == TVA_QOS_GUARANTEED_DELIVERY)
       {
-        rc = publication->GetSession()->SendGdMessage(publication, messageData, request->complete);
+        rc = publication->GetSession()->SendGdMessage(publication, messageData, request->origMessage, request->complete);
         request->invokeCallback = false;
       }
       else
@@ -322,7 +423,7 @@ void Publication::SendMessageWorkerComplete(uv_work_t* req)
 
   if ((request->invokeCallback) || (request->result != TVA_OK))
   {
-    Handle<Value> argv[1];
+    Handle<Value> argv[2];
     if (request->result == TVA_OK)
     {
       argv[0] = Undefined();
@@ -331,18 +432,37 @@ void Publication::SendMessageWorkerComplete(uv_work_t* req)
     {
       argv[0] = String::New(tvaErrToStr(request->result));
     }
+    argv[1] = request->origMessage;
 
     TryCatch tryCatch;
 
-    request->complete->Call(Context::GetCurrent()->Global(), 1, argv);
-    request->complete.Dispose();
+    // Call complete callback if it was set
+    if (!request->complete.IsEmpty())
+    {
+      request->complete->Call(Context::GetCurrent()->Global(), 2, argv);
+      request->complete.Dispose();
+    }
+
+    // Emit "message" event
+    request->publication->Emit(EVT_MESSAGE, 2, argv);
+
     if (tryCatch.HasCaught())
     {
       node::FatalException(tryCatch);
     }
+
+    request->origMessage.Dispose();
   }
 
   delete request;
+}
+
+/*-----------------------------------------------------------------------------
+ * Send of message has completed.
+ */
+void Publication::SendMessageComplete(int argc, v8::Handle<v8::Value> argv[])
+{
+  Emit(EVT_MESSAGE, argc, argv);
 }
 
 
@@ -352,7 +472,6 @@ struct StopPublicationRequest
 {
   Publication* publication;
   TVA_STATUS result;
-  Persistent<Function> complete;
 };
 
 /*-----------------------------------------------------------------------------
@@ -365,19 +484,18 @@ struct StopPublicationRequest
 Handle<Value> Publication::Stop(const v8::Arguments& args)
 {
   HandleScope scope;
-  Publication* pub = ObjectWrap::Unwrap<Publication>(args.This());
+  Publication* publication = ObjectWrap::Unwrap<Publication>(args.This());
 
-  // Arguments checking
-  PARAM_REQ_NUM(1, args.Length());
-  PARAM_REQ_FUNCTION(0, args);        // complete
-
-  // Ready arguments
-  Local<Function> complete = Local<Function>::Cast(args[0]);
+  if (args.Length() > 0)
+  {
+    // Read argument (complete callback)
+    Local<Function> complete = Local<Function>::Cast(args[0]);
+    publication->AddOnceListener(EVT_STOP, Persistent<Function>::New(complete));
+  }
 
   // Send data to worker thread
   StopPublicationRequest* request = new StopPublicationRequest;
-  request->publication = pub;
-  request->complete = Persistent<Function>::New(complete);
+  request->publication = publication;
 
   uv_work_t* req = new uv_work_t();
   req->data = request;
@@ -423,8 +541,8 @@ void Publication::StopWorkerComplete(uv_work_t* req)
 
   TryCatch tryCatch;
 
-  request->complete->Call(Context::GetCurrent()->Global(), 1, argv);
-  request->complete.Dispose();
+  request->publication->Emit(EVT_STOP, 1, argv);
+
   if (tryCatch.HasCaught())
   {
     node::FatalException(tryCatch);

@@ -4,7 +4,9 @@
   "targets": [
     {
         'target_name': "tervela",
-        'sources': [ "src/Tervela.cpp", "src/Session.cpp", "src/Session_Create.cpp", "src/Publication.cpp", "src/Subscription.cpp", "src/Replay.cpp", "src/compat.cpp" ],
+        'sources': [ "src/Tervela.cpp", "src/Session.cpp", "src/Session_Create.cpp", 
+                     "src/Publication.cpp", "src/Subscription.cpp", "src/Replay.cpp", 
+                     "src/EventEmitter.cpp", "src/Logger.cpp", "src/compat.cpp" ],
         'include_dirs': [ "./gyp/include/cvv8" ],
         'conditions': [
             ['OS=="win"',
@@ -24,6 +26,7 @@
                 {
                     'include_dirs': [ "/opt/tervela/include/tervelaapi" ],
                     'libraries': [ "/opt/tervela/lib/libtervelaapi.so", "/opt/tervela/lib/libgdapi.so", "/opt/tervela/lib/libpeapi.so" ],
+                    'cflags': [ '-g' ],
                 }
             ]
         ],

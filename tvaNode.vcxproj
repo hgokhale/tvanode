@@ -188,6 +188,8 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\EventEmitter.cpp" />
+    <ClCompile Include="src\Logger.cpp" />
     <ClCompile Include="src\Publication.cpp" />
     <ClCompile Include="src\Replay.cpp" />
     <ClCompile Include="src\Session.cpp" />
@@ -197,7 +199,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\DataTypes.h" />
+    <ClInclude Include="src\EventEmitter.h" />
     <ClInclude Include="src\Helpers.h" />
+    <ClInclude Include="src\Logger.h" />
     <ClInclude Include="src\Publication.h" />
     <ClInclude Include="src\Replay.h" />
     <ClInclude Include="src\Session.h" />

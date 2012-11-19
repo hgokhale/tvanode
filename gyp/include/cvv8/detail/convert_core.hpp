@@ -1666,7 +1666,7 @@ namespace cvv8 {
         {
             std::string const & str(this->os.str());
             char const * cstr = str.c_str();
-            return v8::String::New( cstr ? cstr : "", cstr ? str.size() : 0 );
+            return v8::String::New( cstr ? cstr : "", cstr ? (int)str.size() : 0 );
         }
 
         /**

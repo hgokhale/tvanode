@@ -10,8 +10,9 @@
 #include "tvaClientAPI.h"
 #include "tvaClientAPIInterface.h"
 #include "DataTypes.h"
+#include "EventEmitter.h"
 
-class Subscription: node::ObjectWrap
+class Subscription: node::ObjectWrap, EventEmitter
 {
 public:
   enum GdSubscriptionAckMode
@@ -27,6 +28,8 @@ public:
    *
    * Events / Listeners:
    *   'message'              - Message received                        - function (message) { }
+   *   'ack'                  - Message ack complete                    - function (err, message) { }
+   *   'stop'                 - Subscription stopped                    - function (err) { }
    *
    * message = {
    *     topic,                 (string : message topic)
@@ -40,18 +43,14 @@ public:
   /*-----------------------------------------------------------------------------
    * Acknowledge a received message when using "manual" ack mode with GD
    *
-   * subscription.ackMessage(message, function (err) {
-   *     // Message acknowledge complete
-   * });
+   * subscription.ackMessage(message, [callback]);
    */
   static v8::Handle<v8::Value> AckMessage(const v8::Arguments& args);
 
   /*-----------------------------------------------------------------------------
    * Stop the subscription
    *
-   * subscription.stop(function (err) {
-   *     // Subscription stop complete
-   * });
+   * subscription.stop([callback]);
    */
   static v8::Handle<v8::Value> Stop(const v8::Arguments& args);
 
@@ -64,7 +63,8 @@ public:
   static v8::Handle<v8::Value> New(const v8::Arguments& args);
   static v8::Handle<v8::Value> NewInstance(Subscription* subscription);
 
-  void SetEventHandler(char* evt, v8::Local<v8::Function> handler);
+  static TVA_STATUS ProcessRecievedMessage(TVA_MESSAGE* message, MessageEvent& messageEvent);
+  static v8::Local<v8::Object> CreateJsMessageObject(MessageEvent& messageEvent);
 
   inline Session* GetSession() { return _session; };
   inline uv_async_t* GetAsyncObj() { return &_async; }
@@ -74,12 +74,18 @@ public:
   inline TVA_UINT32 GetQos() { return _qos; }
   inline GdSubscriptionAckMode GetAckMode() { return _ackMode; }
 
-  inline void PostMessageEvent(MessageEvent& messageEvent)
+  inline bool PostMessageEvent(MessageEvent& messageEvent)
   {
+    bool posted = false;
     uv_mutex_lock(&_messageEventLock);
-    _messageEventQueue.push(messageEvent);
+    if (_isInUse)
+    {
+      _messageEventQueue.push(messageEvent);
+      uv_async_send(GetAsyncObj());
+      posted = true;
+    }
     uv_mutex_unlock(&_messageEventLock);
-    uv_async_send(GetAsyncObj());
+    return posted;
   }
 
   inline bool GetNextMessageEvent(MessageEvent& messageEvent)
@@ -101,7 +107,9 @@ public:
   inline bool IsInUse() { return _isInUse; }
   inline void MarkInUse(bool inUse)
   {
+    uv_mutex_lock(&_messageEventLock);
     _isInUse = inUse;
+
     if (inUse)
     {
       Ref();
@@ -114,6 +122,8 @@ public:
       Unref();
       MakeWeak();
     }
+
+    uv_mutex_unlock(&_messageEventLock);
   }
 
   TVA_STATUS Start(char* topic, uint8_t qos, char* name, GdSubscriptionAckMode gdAckMode);
@@ -136,7 +146,6 @@ private:
   Session* _session;
   TVA_SUBSCRIPTION_HANDLE _handle;
   uv_async_t _async;
-  std::vector< v8::Persistent<v8::Function> > _messageHandler;
   std::queue<MessageEvent> _messageEventQueue;
   uv_mutex_t _messageEventLock;
   char* _topic;
