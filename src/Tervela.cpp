@@ -44,7 +44,9 @@ void Init(Handle<Object> target)
  */
 void FatalErrorHandler(const char* location, const char* message)
 {
+#ifdef TVA_LOGLEVEL_ERROR
   tvaLogFatal("Error @ %s: %s", location, message);
+#endif
 }
 
 
