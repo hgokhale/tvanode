@@ -18,6 +18,9 @@
 
 using namespace v8;
 
+extern "C" {
+  void NODE_EXTERN init (Handle<Object> target);
+};
 
 /*-----------------------------------------------------------------------------
  * Function prototypes
@@ -580,7 +583,7 @@ Handle<Value> GetLogger(const Arguments& args)
  * Node.js init entry point
  */
 extern "C" {
-  void NODE_EXTERN init (Handle<Object> target)
+  void init (Handle<Object> target)
   {
     Init(target);
     Session::Init(target);
