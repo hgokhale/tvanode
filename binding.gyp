@@ -29,13 +29,7 @@
                     'cflags': [ '-g' ],
                 }
             ]
-        ],
-        'variables': {
-          'node_ver': '<!(node --version | sed -e "s/^v\([0-9]*\\.[0-9]*\).*$/\\1/")'
-        },
-        'target_conditions': [
-            ['node_ver<"0.8"', { 'defines': [ "MISSING_UV_THREADS" ] } ]
-        ],
-    },
+        ]
+    }
   ]
 }

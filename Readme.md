@@ -4,10 +4,6 @@ Tervela-node allows access to the Tervela Messaging Framework from within a Node
 
 ## Installing
 
-### Node versions we have tested
-
-The bulk of our testing has been with Node 0.8, but building with Node 0.6 also works, at least on Linux.
-
 ### Platforms we have tested
 
 * CentOS 6.0 64 bit 
@@ -18,7 +14,7 @@ The bulk of our testing has been with Node 0.8, but building with Node 0.6 also 
 ### Dependencies
 
 * Tervela Client Library 5.0.0 or greater installed in the default location
-* node 0.6 or >= 0.8
+* node >= 0.8
 * node-gyp
 
 ### Note on Tervela Client Library Version
