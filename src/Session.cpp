@@ -124,7 +124,7 @@ Session::~Session()
  * session.on(event, listener);
  *
  * Events / Listeners:
- *   'connection-info'         - Initial connection info                 - function (activeTmx, standbyTmx) { }
+ *   'connection-info'      - Initial connection info                 - function (activeTmx, standbyTmx) { }
  *   'connection-lost'      - Connection lost (will auto-reconnect)   - function () { }
  *   'connection-restored'  - Reconnected after connection lost       - function () { }
  *   'close'                - Session closed                          - function () { }

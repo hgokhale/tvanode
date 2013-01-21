@@ -417,6 +417,8 @@ void ConnectWorker(uv_work_t* req)
 {
   ConnectRequest* request = (ConnectRequest*)req->data;
   Session* session = new Session();
+  TVA_SESSION_HANDLE sessionHandle = TVA_INVALID_HANDLE;
+  TVAGD_CONTEXT_HANDLE gdContextHandle = TVA_INVALID_HANDLE;
   TVA_STATUS rc;
 
   do
@@ -424,7 +426,6 @@ void ConnectWorker(uv_work_t* req)
     rc = tvaAppInitialize(NULL);
     if (rc != TVA_OK) break;
 
-    TVA_SESSION_HANDLE sessionHandle;
     rc = tvaSessionNew(Session::SessionNotificationCallback, session, &sessionHandle);
     if (rc != TVA_OK) break;
 
@@ -435,29 +436,14 @@ void ConnectWorker(uv_work_t* req)
 
     if (request->gdClientName)
     {
-      TVAGD_CONTEXT_HANDLE gdContextHandle;
       rc = tvagdContextNew(sessionHandle, request->gdClientName, Session::SessionNotificationCallback, session, &gdContextHandle);
-      if (rc != TVA_OK)
-      {
-        tvaSessionTerm(sessionHandle);
-        break;
-      }
+      if (rc != TVA_OK) break;
 
       rc = tvagdContextCfgSet(gdContextHandle, TVA_GDCFG_PUB_MSG_MAX_OUTSTAND, &request->gdMaxOut, (TVA_INT32)sizeof(request->gdMaxOut));
-      if (rc != TVA_OK)
-      {
-        tvagdContextTerm(gdContextHandle);
-        tvaSessionTerm(sessionHandle);
-        break;
-      }
+      if (rc != TVA_OK) break;
 
       rc = tvagdContextInit(gdContextHandle);
-      if (rc != TVA_OK)
-      {
-        tvagdContextTerm(gdContextHandle);
-        tvaSessionTerm(sessionHandle);
-        break;
-      }
+      if (rc != TVA_OK) break;
 
       session->SetGdHandle(gdContextHandle);
       session->SetGdMaxOut(request->gdMaxOut);
@@ -467,9 +453,22 @@ void ConnectWorker(uv_work_t* req)
     request->session = session;
   } while(0);
 
-  if ((rc != TVA_OK) && (session))
+  if (rc != TVA_OK)
   {
-    delete session;
+    if (gdContextHandle != TVA_INVALID_HANDLE)
+    {
+      tvagdContextTerm(gdContextHandle);
+    }
+
+    if (sessionHandle != TVA_INVALID_HANDLE)
+    {
+      tvaSessionTerm(sessionHandle);
+    }
+
+    if (session)
+    {
+      delete session;
+    }
   }
 
   request->result = rc;
