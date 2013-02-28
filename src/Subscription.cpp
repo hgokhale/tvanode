@@ -261,6 +261,7 @@ TVA_STATUS Subscription::ProcessRecievedMessage(TVA_MESSAGE* message, MessageEve
         field.name[0] = 0;
       }
 
+      rc = TVA_ERR_NOT_IMPLEMENTED;
       switch (fieldInfo.fieldType)
       {
       case FIELD_TYPE_BOOLEAN:
