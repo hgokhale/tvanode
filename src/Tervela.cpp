@@ -103,7 +103,9 @@ static ConnectConfigParam g_connectConfig[] =
   { "subRate",              TVA_APPCFG_PUB_RATE,              ConfigTypeInt    },
   { "dataTransportType",    TVA_APPCFG_DATA_TRANSPORT_TYPE,   ConfigTypeCustom },
   { "subAudit",             TVA_APPCFG_SUB_AUDIT,             ConfigTypeBool   },
+#ifdef TVA_APPCFG_PUB_AUDIT
   { "pubAudit",             TVA_APPCFG_PUB_AUDIT,             ConfigTypeBool   },
+#endif
   { "configFilename",       TVA_APPCFG_CONFIG_FILE,           ConfigTypeString },
   { "maxReconnectCount",    TVA_APPCFG_RECONNECT_MAX_COUNT,   ConfigTypeInt    },
 #ifdef TVA_APPCFG_MAX_PUBS
@@ -114,9 +116,15 @@ static ConnectConfigParam g_connectConfig[] =
 #endif
   { "allowTerminationName", TVA_APPCFG_ALLOW_TERM_NAME,       ConfigTypeString },
   { "logFilename",          TVA_APPCFG_LOCAL_LOGFILE,         ConfigTypeString },
+#ifdef TVA_APPCFG_LOCAL_LOGTAG
   { "logTag",               TVA_APPCFG_LOCAL_LOGTAG,          ConfigTypeString },
+#endif
+#ifdef TVA_APPCFG_FAVOR_TMX_ORDER
   { "favorTmxOrder",        TVA_APPCFG_FAVOR_TMX_ORDER,       ConfigTypeBool   },
+#endif
+#ifdef TVA_APPCFG_GC_CHANNEL_ONLY
   { "gcChannelOnly",        TVA_APPCFG_GC_CHANNEL_ONLY,       ConfigTypeBool   }
+#endif
 };
 
 #define NUM_PARAMS  (sizeof(g_connectConfig) / sizeof(ConnectConfigParam))
